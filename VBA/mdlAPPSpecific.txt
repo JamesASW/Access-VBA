@@ -1,0 +1,154 @@
+Attribute VB_Name = "mdlAPPSpecific"
+Option Compare Database
+Option Explicit
+
+Global gclsImgList As clsImageList
+Global gclsImgListFiles As clsImageList
+Global gclsDS As clsADOServer
+Global gclsLVWLogs As clsListView
+Global gclsLVWUsers As clsListView
+Global mRSLogs As ADODB.Recordset
+Global gRSUsers As ADODB.Recordset
+Global mstrFilter As String
+
+Public Function TagContains(ctl As Control, Tag As String) As Boolean
+'~ Used to determine if the tag contains a control word
+    On Error Resume Next
+    
+    If InStr(ctl.Tag, Tag) > 0 Then TagContains = True
+
+End Function
+'~ ***************************************************************
+Public Function fSelectComboValue(ByRef cmb As ComboBox, ByVal strColumnSearchValue As String, ByVal intColumn As Integer, Optional ByVal strDefault As String) As Boolean
+On Error GoTo ErrorProcedure
+    Dim i As Integer
+    Dim booFound As Boolean
+    
+'~ Select the correct combo value
+'------------------------------------------
+    For i = 0 To cmb.ListCount - 1
+        If cmb.Column(intColumn, i) = strColumnSearchValue Then
+            cmb = cmb.ItemData(i)
+            booFound = True
+            Exit For
+        End If
+    Next i
+    
+    If Not booFound Then
+        If Not fIsNothing(strDefault) Then
+            cmb.value = strDefault
+        Else
+            cmb.value = strColumnSearchValue
+        End If
+    End If
+    fSelectComboValue = True
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorProcedure:
+    fError "mdlAppSpecific", "fSelectComboValue", Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function lvwExcelOutput(ByVal lvw As ListView, ByVal booSelectedOnly As Boolean, ByVal strSheetName As String, Optional ByVal strSaveLocationName As String = "") As Boolean
+Const cstrProcedure As String = "ExcelOutput"
+On Error GoTo ErrorProcedure
+    Dim xlsApp As Object
+    Dim xlsWrkb As Object
+    Dim xlsSheet As Object
+    Dim intStartingColumn As Integer
+    Dim intEndingColumn As Integer
+    Dim intColumn As Integer
+    Dim lngRow As Long
+    Dim chdItem As ColumnHeader '-- chd = ColumnHeaDer, would have used "chr" but is a reserved word
+    Dim lvwItem As ListItem
+    Dim lsiItem As ListSubItem
+'---------------------------
+    
+'~ Complete Nostro Outputs
+'------------------------------------------
+    fSYSMsg "Exporting to Excel..."
+    
+    '~ Create excel object
+    Set xlsApp = CreateObject("Excel.Application")
+    Set xlsWrkb = xlsApp.Workbooks.Add
+    Set xlsSheet = xlsWrkb.Worksheets(1)
+    
+    '~ Set sheet name (max 30 char)
+    strSheetName = Left(strSheetName, 29)
+    xlsSheet.Name = strSheetName
+    xlsWrkb.Sheets(strSheetName).Activate
+    
+    '~ Export data from listview directly
+    '-- Add columnheaders
+        intStartingColumn = 1
+                    
+        For Each chdItem In lvw.ColumnHeaders
+            intColumn = intColumn + 1
+            If intColumn >= intStartingColumn And Not chdItem.Text Like "*ë*" Then
+            '-- Add header name to sheet, using the chdItem's index + 1 as the column number
+                intEndingColumn = intEndingColumn + 1
+                xlsWrkb.Sheets(strSheetName).Cells(1, chdItem.Index - intStartingColumn + 1).value = Replace(Replace(chdItem.Text, "«", ""), "»", "")
+            End If
+        Next chdItem
+
+    '-- Now loop through all listitems held in the listview
+        lngRow = 1
+        For Each lvwItem In lvw.ListItems
+            If Not booSelectedOnly Or lvwItem.Selected Then
+                lngRow = lngRow + 1
+
+            '-- Add data value to sheet, using the listitem's index + 1 as the row
+                If intStartingColumn <= 1 Then
+                    xlsWrkb.Sheets(strSheetName).Cells(lngRow, 1).value = lvwItem.Text
+                End If
+
+            '-- Loop through the listitem's subitems
+                intColumn = 1
+                For Each lsiItem In lvwItem.ListSubItems
+                    intColumn = intColumn + 1
+                    If intColumn >= intStartingColumn And intColumn <= intEndingColumn Then
+                    '-- Add data value to sheet, using the listitem's index + 1 as the row and the ListSubItem's index +1 as the column
+                        xlsWrkb.Sheets(strSheetName).Cells(lngRow, lsiItem.Index + 1 - intStartingColumn + 1).value = lsiItem.Text
+                    End If
+                Next lsiItem
+            End If
+        Next lvwItem
+        
+    '~~ Resize
+        With xlsWrkb.Sheets(strSheetName)
+            .Cells.Font.Size = 10
+            .Rows("1:1").Font.Bold = True
+            .Range("A1").AutoFilter
+            .Cells.ColumnWidth = 221.71
+            .Cells.EntireRow.AutoFit
+            .Cells.ColumnWidth = 10
+            .Cells.EntireColumn.AutoFit
+        End With
+        
+    '~~ Save file?
+    If Not fIsNothing(strSaveLocationName) Then
+        xlsWrkb.SaveAs strSaveLocationName
+        xlsWrkb.Close
+        xlsApp.Quit
+        Set xlsApp = Nothing
+    Else
+        xlsApp.Visible = True
+    End If
+    
+    lvwExcelOutput = True
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+    fSYSMsg
+Exit Function
+ErrorProcedure:
+    fError "mdlAppSpecific", "ExcelOutput", Err.Number, Err.Description, True
+    xlsApp.Visible = True
+    Resume ExitProcedure
+    Resume '~ Debug only
+End Function
+

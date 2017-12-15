@@ -1,0 +1,738 @@
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "clsTreeview"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Option Compare Database
+Option Explicit
+'~ ****************************************************************************************************************************************
+'  INFORMATION
+'  Details and instrutions can be found at the bottom of the modules
+'  Class Name:  clsTreeview
+'  Description: Manage treeview populations and actions
+'  Change History: Created - 05/03/2014 to 10/03/2014
+'~ ****************************************************************************************************************************************
+
+'~ ***************************************************************
+'  DECLARATIONS AND SETUP
+'~ ***************************************************************
+Private mRS As Object
+Private mtvw As Treeview
+Private mstrSQL As String
+Private mimgList As ImageList
+Private mRSOut As ADODB.Recordset
+Private mRSErrors As ADODB.Recordset
+Private mintDataStructure As Integer
+Private mlngFind As Long
+
+Public Enum DataStructure
+    [Standard] = 1      '~ TreeID / TreeName / ParentID / IconID
+    [FullPath] = 2      '~ FullPath / Seperator / IconID    (where FullPath is a string with seperators e.g. Folder paths)
+End Enum
+
+'~ ***************************************************************
+Private Sub Class_Initialize()
+On Error GoTo ErrorProcedure
+
+'~ Set up Class
+'------------------------------------------------------------
+    fCreateErrorRecordset mRSErrors '~ Build Error Recordset
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Sub
+ErrorProcedure:
+    Err.Raise Err.Number
+    Resume ExitProcedure
+End Sub
+'~ ***************************************************************
+Private Sub Class_Terminate()
+On Error Resume Next
+    Dim intNodes As Integer
+    
+'~ Close and clear objects
+'------------------------------------------------------------
+    mRSErrors.Close
+    Set mRSErrors = Nothing
+    mRS.Close
+    Set mRS = Nothing
+    mRSOut.Close
+    Set mRSOut = Nothing
+    'ClearIcons
+    'ClearAll
+'------------------------------------------------------------
+
+End Sub
+
+'~ ***************************************************************
+'  Public Procedures
+'~ ***************************************************************
+Public Function ResetErrorRecordset() As Boolean
+On Error GoTo ErrorProcedure
+
+'~ Delete all errors from the Error RS (cheat and just rebuild... its simpler)
+'------------------------------------------------------------
+    mRSErrors.Close
+    Set mRSErrors = Nothing
+    fCreateErrorRecordset mRSErrors
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function ResetErrorRecordset"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function SelectNode(ByVal strNodeKey As String) As Boolean
+On Error GoTo ErrorProcedure
+    Dim nde As node
+    
+'~ Select node by key
+'------------------------------------------------------------
+    For Each nde In mtvw.Nodes
+        If nde.Key = strNodeKey Then
+            nde.Selected = True
+            SelectNode = True
+        End If
+    Next
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function ResetErrorRecordset"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function Add(ByVal strKey As String, ByVal strText As String, Optional ByVal strParentID As String = "" _
+                  , Optional ByVal ndeParent As node, Optional ByVal ndeSibling As node, Optional booSiblingAfter As Boolean = True _
+                  , Optional strIcon As String) As node
+On Error GoTo ErrorProcedure
+    Dim strSibling As String
+    Dim strParent As String
+    Dim booSuccess As Boolean
+    Dim strRelative As String
+    Dim intRelationship As Integer
+    
+'~ Add a new node
+'------------------------------------------------------------
+    '~ Determine parent
+    If Not ndeParent Is Nothing Then
+        strParent = Nz(ndeParent.Key, "")
+    Else
+        strParent = strParentID
+    End If
+    
+    '~ Determine Sibling
+    If Not ndeSibling Is Nothing Then
+        strSibling = Nz(ndeSibling.Key, "")
+    Else
+        strSibling = ""
+    End If
+    
+    '~ Am i top level at bottom?
+    If strParent = "" And strSibling = "" Then '~ Are we a top node?
+        '~ Add Node
+        If strIcon = "" Then
+            mtvw.Nodes.Add , , strKey, strText
+        Else
+            mtvw.Nodes.Add , , strKey, strText, strIcon
+        End If
+        booSuccess = True
+    Else
+        Select Case True
+         Case strSibling <> "" And booSiblingAfter = True '~ Before selected node
+            strRelative = strSibling
+            intRelationship = tvwNext
+         Case strSibling <> "" And booSiblingAfter = False '~ After selected node
+            strRelative = strSibling
+            intRelationship = tvwPrevious
+         Case strParent <> "" '~ Selected node is parent and add to bottom
+            strRelative = strParent
+            intRelationship = tvwChild
+        End Select
+        
+        '~ Add Node
+        If strIcon = "" Then
+            mtvw.Nodes.Add strRelative, intRelationship, strKey, strText
+        Else
+            mtvw.Nodes.Add strRelative, intRelationship, strKey, strText, strIcon
+        End If
+        booSuccess = True
+    End If
+    
+    mtvw.Refresh
+    Set Add = mtvw.Nodes(mtvw.Nodes.Count)
+    mlngFind = 1
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function Add"
+    Resume ExitProcedure
+    Resume
+End Function
+'~ ***************************************************************
+Public Function Move(ByVal nde As node, Optional ByVal ndeParent As node, Optional ByVal ndeSibling As node _
+                   , Optional booSiblingAfter As Boolean = True, Optional strIcon As String) As Boolean
+On Error GoTo ErrorProcedure
+    Dim ndeNew As node
+    Dim ndeChild As node
+    Dim strKey As String
+    Dim booFailedValidation As Boolean
+    
+'~ Move a node
+'------------------------------------------------------------
+    '~ Make sure the node isn't being moved on itself
+    If Not ndeParent Is Nothing Then
+        If nde = ndeParent Then
+            booFailedValidation = True
+        End If
+    End If
+    If Not ndeSibling Is Nothing Then
+        If nde = ndeSibling Then
+            booFailedValidation = True
+        End If
+    End If
+    
+    If Not booFailedValidation Then
+        '~ Create a new node in the location that we're moving too
+        Set ndeNew = Add(nde.Key & "_NEW", nde.Text, , ndeParent, ndeSibling, booSiblingAfter, Nz(strIcon, Nz(nde.Image, "")))
+        
+        '~ Change all nodes children to the new parent
+        If Not nde.Child Is Nothing Then
+            Set ndeChild = nde.Child
+            Set ndeChild.Parent = nde
+            Do Until ndeChild Is Nothing
+                Set ndeChild = nde.Child.LastSibling
+                Set ndeChild.Parent = ndeNew
+                
+                Set ndeChild = nde.Child
+            Loop
+        End If
+    
+        '~ Delete original node
+        strKey = nde.Key
+        If Delete(nde) Then
+            '~ Rename Key
+            If UpdateNode(ndeNew, strKey) Then
+                Move = True
+            End If
+        End If
+    
+        ndeNew.Selected = True
+    Else
+        Err.Raise 10001, , "Can not move a node in reference to itself."
+    End If
+    mlngFind = 1
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    If Err.Number = 35601 Then
+        Resume Next
+    Else
+        fLogClassError Err.Number, Err.Description, "Public Function Move"
+        Resume ExitProcedure
+    End If
+End Function
+'~ ***************************************************************
+Public Function Delete(Optional ByVal nde As node, Optional ByVal lngIndex As Long = -1, Optional ByVal strKey As String = "") As Boolean
+On Error GoTo ErrorProcedure
+        
+'~ Delete a node (can use varying values to parse and identify)
+'------------------------------------------------------------
+    Delete = True
+    Select Case True
+     Case Not nde Is Nothing
+        mtvw.Nodes.Remove nde.Index
+     Case lngIndex >= 0
+        mtvw.Nodes.Remove lngIndex
+     Case strKey <> ""
+        For Each nde In mtvw.Nodes
+            If nde.Key = strKey Then
+                mtvw.Nodes.Remove nde.Index
+                Exit For
+            End If
+        Next
+     Case Else
+        Delete = False
+    End Select
+    mlngFind = 1
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    If Not Err.Number = 35600 Then
+        fLogClassError Err.Number, Err.Description, "Public Function Delete"
+        Resume ExitProcedure
+    Else
+        Resume Next
+    End If
+End Function
+'~ ***************************************************************
+Public Function Refresh() As Boolean
+On Error GoTo ErrorProcedure
+    Dim strPathSplit() As String
+    Dim strParent As String
+    Dim strNode As String
+    Dim a As Long
+    
+'~ Refresh treeview
+'------------------------------------------------------------
+    ResetErrorRecordset
+    ClearAll
+    If mstrSQL <> "" Then
+        If Not mRS Is Nothing Then
+            mRS.Close
+            Set mRS = Nothing
+        End If
+        Set mRS = CurrentDb.OpenRecordset(mstrSQL, dbReadOnly)
+    End If
+    
+    With mRS
+        If .RecordCount > 0 Then
+            .MoveLast
+            .MoveFirst
+        End If
+        
+        Do Until .EOF
+            '~ Check for errors, if something happened, stop
+            If mRSErrors.RecordCount = 0 Then
+                Select Case mintDataStructure
+                 Case 1 '~ Standard
+                    Add .Fields("TreeID"), .Fields("TreeName"), Nz(.Fields("ParentID"), ""), , , , Nz(.Fields("IconID"), "")
+                 Case 2 '~ Full Path
+                    strParent = ""
+                    strPathSplit = Split(.Fields("FullPath"), .Fields("Seperator"))
+                    For a = 0 To UBound(strPathSplit)
+                        strNode = strPathSplit(a)
+                        Add strNode, strNode, strParent, , , .Fields("IconID")
+                        strParent = strNode
+                    Next
+                End Select
+                .MoveNext
+            Else
+                Exit Do
+            End If
+        Loop
+    End With
+    mlngFind = 1
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function Refresh"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function UpdateNode(ByVal nde As node, Optional ByVal strKey As String, Optional ByVal strText As String _
+                         , Optional ByVal strIcon As String) As Boolean
+On Error GoTo ErrorProcedure
+    
+'~ Update a node on the treeview treeview
+'------------------------------------------------------------
+    If Not IsNull(strKey) And Not strKey = "" Then
+        nde.Key = strKey
+    End If
+    
+    If Not IsNull(strText) And Not strText = "" Then
+        nde.Text = strText
+    End If
+    
+    If Not IsNull(strIcon) And Not strIcon = "" Then
+        nde.Image = strIcon
+    End If
+    mlngFind = 1
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function UpdateNode"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function Expand(booExpand As Boolean, Optional ByVal intNumberOfLevels As Integer = 0) As Boolean
+On Error GoTo ErrorProcedure
+    Dim tvwNode As node
+
+'~ Expands or collapses the treeview
+'------------------------------------------------------------
+    For Each tvwNode In mtvw.Nodes
+        If intNumberOfLevels = 0 Or InStr(tvwNode.FullPath, "\") <= intNumberOfLevels Then
+            tvwNode.Expanded = booExpand
+        End If
+    Next
+    mtvw.Refresh
+    Expand = True
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function Expand"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function Find(ByVal strFind As String, ByVal booNext As Boolean) As Boolean
+On Error GoTo ErrorProcedure
+    Dim booFind As Boolean
+    Dim a As Long
+    
+'~ Search treeview for a node related to the text and select
+'------------------------------------------------------------
+    If Not booNext Then '~ Reset position if needed
+        mlngFind = 1
+    End If
+    
+    For a = mlngFind To mtvw.Nodes.Count '~ loop through treeview
+        If mtvw.Nodes(a).Key Like strFind Or mtvw.Nodes(a).Text Like strFind Then '~ Compare with key and text
+            mtvw.Nodes(a).Selected = True
+            mtvw.Nodes(a).EnsureVisible
+            booFind = True
+            mlngFind = a + 1 '~ Incase we need to continue, get next position
+            Exit For
+        End If
+    Next
+    
+    Find = booFind
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function Find"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Sub SetupTreeview()
+On Error GoTo ErrorProcedure
+
+'~ Preps common properties for treeviews
+'------------------------------------------------------------
+    With mtvw
+        '~ Set defaults
+        .LineStyle = tvwRootLines
+        .Appearance = ccFlat
+        .HideSelection = False
+        .BorderStyle = ccNone
+        .HotTracking = True
+        .SingleSel = False
+        .Sorted = False
+        .Scroll = True
+        .LabelEdit = tvwManual
+        .Font.Name = "Calibri"
+        
+        .Refresh '~ must refresh to display correctly
+    End With
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Sub
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Sub SetupTreeview"
+    Resume ExitProcedure
+End Sub
+'~ ***************************************************************
+Public Sub ClearIcons()
+On Error Resume Next
+    Set mtvw.ImageList = Nothing
+End Sub
+'~ ***************************************************************
+Public Sub ClearAll()
+On Error GoTo ErrorProcedure
+    Dim intNodes As Integer
+    
+'~ Clear all nodes from treeview
+'------------------------------------------------------------
+    mtvw.Nodes.Clear
+'    For intNodes = mtvw.Nodes.Count To 1 Step -1
+'        Delete , intNodes
+'    Next
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Sub
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Sub ClearAll"
+    Resume ExitProcedure
+End Sub
+'~ ***************************************************************
+Public Sub KillRSIn()
+On Error GoTo ErrorProcedure
+    
+'~ Kill RS In connection
+'------------------------------------------------------------
+    If Not mRS Is Nothing Then
+        mRS.Close
+        Set mRS = Nothing
+    End If
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Sub
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Sub KillRSIn"
+    Resume ExitProcedure
+End Sub
+
+'~ ***************************************************************
+'  Private Procedures
+'~ ***************************************************************
+Private Function fCreateErrorRecordset(ByRef RS As ADODB.Recordset) As Boolean
+On Error GoTo ErrorProcedure
+
+'~ Create new recordset
+'------------------------------------------------------------
+    Set RS = New ADODB.Recordset
+    
+    With RS
+    '-- Set a memory only recordset
+        Set .ActiveConnection = Nothing
+        .CursorLocation = adUseClient
+        .LockType = adLockBatchOptimistic
+    
+    '-- Add new fields
+        With .Fields
+            .Append "ErrorNumber", adVariant
+            .Append "ErrorMessage", adVariant
+            .Append "ErrorProcedure", adVariant
+            .Append "ErrorTime", adVariant
+        End With
+    
+    '-- Open the recordset
+        .Open
+    End With
+    
+    fCreateErrorRecordset = True
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    '~ hmmm what to do....
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Private Function fLogClassError(ByVal lngErrorNumber As Long, ByVal strErrorMessage As String, ByVal strProcedure As String) As Boolean
+On Error GoTo ErrorProcedure
+
+'~ Log Errors into a recordset
+'------------------------------------------------------------
+    With mRSErrors
+        .AddNew
+        .Fields(0) = lngErrorNumber
+        .Fields(1) = strErrorMessage
+        .Fields(2) = strProcedure
+        .Fields(3) = Format(Now(), "yyyy-mm-dd hh:nn:ss")
+        .Update
+    End With
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    Err.Raise Err.Number
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Private Function fGenerateOutputRS() As Boolean
+On Error GoTo ErrorProcedure
+    Dim nde As node
+    Dim ndeCalc As node
+    Dim intLevel As Integer
+    Dim intOrder As Integer
+    
+'~ Create new recordset and populate using tvw
+'------------------------------------------------------------
+    '~~ Clear if it existed
+        Set mRSOut = Nothing
+    
+    '~~ Build the RS
+        Set mRSOut = New ADODB.Recordset
+        With mRSOut
+            '~ Set a memory only recordset
+            Set .ActiveConnection = Nothing
+            .CursorLocation = adUseClient
+            .LockType = adLockBatchOptimistic
+        
+            '~ Add new fields
+            With .Fields
+                Select Case mintDataStructure
+                 Case 1
+                    .Append "TreeID", adVariant
+                    .Append "TreeName", adVariant
+                    .Append "ParentID", adVariant
+                    .Append "Level", adInteger
+                    .Append "Order", adInteger
+                 Case 2
+                    .Append "FullPath", adVariant
+                    .Append "Seperator", adVariant
+                    .Append "IconID", adVarChar
+                End Select
+            End With
+            
+            '~ Open the recordset
+            .Open
+        End With
+    
+    '~~ Populate the data
+        For Each nde In mtvw.Nodes
+            With mRSOut
+                .AddNew
+                Select Case mintDataStructure
+                 Case 1 '~ Standard
+                    '~ Work out the level
+                    Set ndeCalc = nde
+                    intLevel = 1
+                    Do Until ndeCalc.Parent Is Nothing
+                        Set ndeCalc = ndeCalc.Parent
+                        intLevel = intLevel + 1
+                    Loop
+                    
+                    '~ Work out the order number
+                    Set ndeCalc = nde
+                    intOrder = 1
+                    Do Until ndeCalc.Previous Is Nothing
+                        Set ndeCalc = ndeCalc.Previous
+                        intOrder = intOrder + 1
+                    Loop
+                    
+                    '~ Append
+                    .Fields("TreeID") = nde.Key
+                    .Fields("TreeName") = nde.Text
+                    If Not nde.Parent Is Nothing Then
+                        .Fields("ParentID") = nde.Parent.Key
+                    End If
+                    .Fields("Level") = intLevel
+                    .Fields("Order") = intOrder
+                 Case 2 '~ Full path
+                    .Fields("FullPath") = nde.FullPath
+                    .Fields("Seperator") = "\"
+                    .Fields("IconID") = nde.Image
+                End Select
+                .Update
+            End With
+        Next
+    
+    fGenerateOutputRS = True
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Private Function fGenerateOutputRS"
+    Resume ExitProcedure
+End Function
+
+'~ ***************************************************************
+'  PROPERTIES
+'~ ***************************************************************
+Public Property Get DataStructure() As DataStructure
+    DataStructure = mintDataStructure
+End Property
+
+Public Property Let DataStructure(ByVal intDataStructure As DataStructure)
+    mintDataStructure = intDataStructure
+End Property
+
+Public Property Get SQL() As String
+    SQL = mstrSQL
+End Property
+
+Public Property Let SQL(ByVal strSQL As String)
+    mstrSQL = strSQL
+End Property
+
+Public Property Get RSIn() As Object
+    Set RSIn = mRS
+End Property
+
+Public Property Let RSIn(ByVal RS As Object)
+    Set mRS = RS
+End Property
+
+Public Property Let Treeview(ByVal tvw As Treeview)
+    Set mtvw = tvw
+End Property
+
+Public Property Get Treeview() As Treeview
+    Set Treeview = mtvw
+End Property
+
+Public Property Get ImageList() As ImageList
+    Set ImageList = mimgList
+End Property
+
+Public Property Let ImageList(ByVal imgList As ImageList)
+    Set mimgList = imgList
+    Set mtvw.ImageList = mimgList
+End Property
+
+Public Property Get Errors() As ADODB.Recordset
+    Set Errors = mRSErrors.Clone
+End Property
+
+Public Property Get RSOut() As ADODB.Recordset
+    If fGenerateOutputRS Then
+        Set RSOut = mRSOut.Clone
+    End If
+End Property
+'~ ****************************************************************************************************************************************
+'   **** MOST IMPORTANT NOTE OF THE TREEVIEW CLASS ****
+'   The treeview class covers for Add/Update/Delete/Move/Setup/Expand/Collapse etc etc.... but you must use it smartly to get the most out of it.
+'   It is NOT a treeview for dummies module. you must have knowledge of treeviews to use it to it's full potential
+
+'~ 1)  What you need to know about treeview construction in general
+'   a) One of the most important things to know about treeviews is that the key can not be numeric. The class does not cover for this, so if you are
+'      using numeric keys, you will want to alter the query/recordset to not do this. For example I will usually concatenate "TVW" or "KEY" infront of
+'      numeric keys for the treeview population.
+'   b) All treeviews are unbound. It's an obvious one, but it should be remembered. Note that if you do not want the recordset to be locked to the datset
+'      during the life cycle of the class, you will need to close the in recordset (by terminating the passed in recordset or closing using an in class function
+
+'~ 2)  What you need to know about this class
+'   The class is designed to use specifically structured data to populate a treeview control. On creation of the class it covers 2 data structures:
+'   - Standard: TreeID, TreeName, ParentID, IconID
+'       Standard requires the exact field names and the data to be ordered correctly so that the tree builds from top down. If it is not ordered
+'       correctly, it will not build the full tree and error.
+
+'   - FullPath: FullPath, Seperator, IconID
+'       Full path is a long string using a seperator to populate the treeview. Due to it's nature it can be built in any orders. The downsides to
+'       full path is that you can not supply an ID/key and therefore can not use numbers OR special characters for a nodes text.
+
+'   Defining the main data recordset as an object.
+'   This is done specifically to allow a DAO or ADODB recordset to be passed in and is the most simplest way to do this without being overcomplicated.
+
+'   Returning a recordset copy of the treeview
+'   RSOut returns an ADODB recordset of a version of the treeview. It will output two different versions depending on the DataStructure selected
+'   - Standard: TreeID, TreeName, ParentID, Level, Order, IconID
+'   - FullPath: FullPath, Seperator, IconID
+
+'~ 3)  Editing the treeview. Why direct edits of treeview rather than editing of the main data to change a treeview?
+'   As I can not garuantee the construction of the source data, I opted to design the class to allow direct changes to the treeview and have a dedicated
+'   output (as an ADODB recordset) so the developer can use this to update their source data if needed.
+
+'~ 4)  The parent / Sibling parameters are confusing....
+'   They very much are, so here are the rules for using these when Adding/Moving:
+
+'   a) I want to Add a node at the top level, at the bottom of the list:
+'       Do not supply a parent OR sibling
+'   b) I want to Add a node before or after the selected node
+'       Supply a sibling only and specify the before/after sibling boolean variables
+'   c) I want to Add a node as a child of selected node (as last child)
+'       Supply the parent node only
+'   d) I want to Add a node as a child of a parent node, but in position 3 of the children....
+'       Use option b OR (c and then Move the new node ...cls Add returns the new node to help wtih this)
+
+'   Anything else, speak to me.
+'~ ****************************************************************************************************************************************

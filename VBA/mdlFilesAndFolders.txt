@@ -1,0 +1,236 @@
+Attribute VB_Name = "mdlFilesAndFolders"
+Option Compare Database
+Option Explicit
+
+Public Function fGetOpenFilename(strTitle As String, Optional strDefaultPath As String, Optional strFilterDescription As String, Optional strFilterExtension As String) As String
+
+'
+'   Returns the path and name of the user selected file
+'
+
+    Dim FileDialog As FileDialog
+    
+    Set FileDialog = Application.FileDialog(msoFileDialogFilePicker)
+    
+    With FileDialog
+        .AllowMultiSelect = False
+        .Title = strTitle
+        .Filters.Clear
+        If Not fIsNothing(strFilterDescription) Then
+            .Filters.Add strFilterDescription, strFilterExtension
+        End If
+        If Not fIsNothing(strDefaultPath) Then
+            .InitialFileName = strDefaultPath
+        End If
+        If .Show = -1 Then fGetOpenFilename = .SelectedItems(1)
+    End With
+    
+    Set FileDialog = Nothing
+End Function
+
+Public Function fGetOpenFolder(strTitle As String) As String
+
+    Dim FolderDialog As FileDialog
+    
+    Set FolderDialog = Application.FileDialog(msoFileDialogFolderPicker)
+    
+    With FolderDialog
+        .AllowMultiSelect = False
+        .Title = strTitle
+        
+        If .Show = -1 Then fGetOpenFolder = .SelectedItems(1) & "\"
+    
+    End With
+
+End Function
+
+Public Function FileOrDirExists(PathName As String) As Boolean
+     'Macro Purpose: Function returns TRUE if the specified file
+     '               or folder exists, false if not.
+     'PathName     : Supports Windows mapped drives or UNC
+     '             : Supports Macintosh paths
+     'File usage   : Provide full file path and extension
+     'Folder usage : Provide full folder path
+     '               Accepts with/without trailing "\" (Windows)
+     '               Accepts with/without trailing ":" (Macintosh)
+     
+    Dim iTemp As Integer
+     
+     'Ignore errors to allow for error evaluation
+    On Error Resume Next
+
+    iTemp = GetAttr(PathName)
+    
+     'Check if error exists and set response appropriately
+    Select Case Err.Number
+    Case Is = 0
+        FileOrDirExists = True
+    Case Else
+        FileOrDirExists = False
+    End Select
+     
+     'Resume error checking
+    On Error GoTo 0
+End Function
+
+Function FolderExists(strPath As String) As Boolean
+    On Error Resume Next
+    FolderExists = ((GetAttr(strPath) And vbDirectory) = vbDirectory)
+End Function
+
+Public Function TrailingSlash(varIn As Variant) As String
+    If Len(varIn) > 0 Then
+        If Right(varIn, 1) = "\" Then
+            TrailingSlash = varIn
+        Else
+            TrailingSlash = varIn & "\"
+        End If
+    End If
+End Function
+
+Public Function MakeFileReadOnly(ByVal sFile As String)
+On Error Resume Next
+    Dim strSaveFilename As String
+    Dim oFSO As Object      'Scripting.FileSystemObject
+    Dim oFile As Object     'Scripting.File
+
+    ' Create Objects
+    ' Uses Late Binding
+    Set oFSO = CreateObject("Scripting.FileSystemObject")
+    Set oFile = oFSO.GetFile(FilePath:=sFile)
+
+    ' Set file to be read-only
+    oFile.Attributes = 1
+ 
+    ' Releasing Objects
+    If Not oFSO Is Nothing Then Set oFSO = Nothing
+    If Not oFile Is Nothing Then Set oFile = Nothing
+
+End Function
+
+Public Function GetFileNameFromFilePath(strFilePath As String) As String
+    GetFileNameFromFilePath = Mid(strFilePath, InStrRev(strFilePath, "\") + 1)
+End Function
+Public Function GetFileExtensionFromFilePath(strFilePath As String) As String
+    GetFileExtensionFromFilePath = Mid(strFilePath, InStrRev(strFilePath, ".") + 1)
+End Function
+Public Function GetFolderPathFromFilePath(strFilePath As String) As String
+    GetFolderPathFromFilePath = Left(strFilePath, InStrRev(strFilePath, "\"))
+End Function
+
+Public Sub CreateFolder(strFolder As String)
+    Dim fso As FileSystemObject
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim intStart As Integer
+    Dim booEnd As Boolean
+    Dim strNewFolder As String
+    
+    intStart = 0
+    strFolder = TrailingSlash(strFolder)
+    
+    Do Until intStart = Len(strFolder)
+        intStart = InStr(intStart + 1, strFolder, "\")
+        If intStart = 0 Then
+            booEnd = True
+        Else
+            '~ Make sure it's not searching for a folder called "\\"
+            If Left(strFolder, intStart) <> "\\" Then
+                '~ Now, if it's a network drive we don't want it searching for folderexists/driveexists on the network drive itself so...
+                If (fNumOfCharInString(Left(strFolder, intStart), "\") = 3 And Left(strFolder, 2) = "\\") Then
+                    '~ do nothing
+                Else
+                    strNewFolder = Left(strFolder, intStart)
+                    If Not fso.FolderExists(strNewFolder) And Not fso.DriveExists(strNewFolder) Then
+                        fso.CreateFolder (strNewFolder)
+                    End If
+                End If
+            End If
+        End If
+    Loop
+End Sub
+
+Public Function DeleteFolder(strFolder As String) As Boolean
+On Error Resume Next
+    Dim fso As FileSystemObject
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    If Right(strFolder, 1) = "\" Then
+        strFolder = Left(strFolder, Len(strFolder) - 1)
+    End If
+    
+    If FileOrDirExists(strFolder) Then
+        fso.DeleteFolder strFolder
+    End If
+    DeleteFolder = (Err.Number = 0)
+End Function
+
+Public Function RenameFile(strOldFile As String, strNewFile As String) As Boolean
+On Error GoTo ErrorCatch:
+    If FileOrDirExists(strOldFile) Then
+        Name strOldFile As strNewFile
+    End If
+    RenameFile = True
+Exit Function
+ErrorCatch:
+    RenameFile = False
+End Function
+
+Public Function fAccessRightsWrite(ByVal FolderPath As String) As Boolean
+'Returns false if user does not have write access on the specified folder
+    Dim strTestPath As String
+    On Error GoTo err_WriteAccess
+
+    'Defines the path of the test file
+        strTestPath = fGetCleanFolderPath(FolderPath) & "\WriteAccessTest.txt"
+    
+    'Writes the file for access rights testing
+        Open strTestPath For Output As #1
+        Close #1
+    
+    'Deletes the test file
+        Kill strTestPath
+    
+    fAccessRightsWrite = True
+    
+Exit Function
+err_WriteAccess:
+    If Err.Number = 75 Then
+        fAccessRightsWrite = False
+    Else
+        MsgBox "Error " & Err.Number & ", " & Err.Description, vbExclamation, "fAccessRightsWrite"
+    End If
+End Function
+
+Public Function fNumOfCharInString(strLook As String, strChar As String) As Long
+'~~ Counts the number of times strChar is found in strLook
+'~~ e.g. fNumOfCharInString("qwerty123q4", "q") = 2
+
+'~~ Define Variables
+    Dim lngCount As Long
+    Dim intLoc As Integer
+        
+        '~ Loop through and find them biatches
+        intLoc = 1
+        Do Until intLoc >= Len(strLook) Or intLoc = 0
+            intLoc = InStr(intLoc, strLook, strChar)
+            If intLoc > 0 Then
+                lngCount = lngCount + 1
+                intLoc = intLoc + 1
+            End If
+        Loop
+        
+    '~~ Output
+        fNumOfCharInString = lngCount
+    
+End Function
+
+Public Function fGetCleanFolderPath(ByVal strFolderPath As String) As String
+' Returns folder's path with a \ at the end if needed
+
+    If Not Right(strFolderPath, 1) = "\" Then
+        fGetCleanFolderPath = strFolderPath & "\"
+    Else
+        fGetCleanFolderPath = strFolderPath
+    End If
+    
+End Function

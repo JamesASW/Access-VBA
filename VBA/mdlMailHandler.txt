@@ -1,0 +1,176 @@
+Attribute VB_Name = "mdlMailHandler"
+Option Compare Database
+Option Explicit
+'-- -------------------------------------------------------------------------------------------------------------------------------------
+'-- Module level Procedures to incorporate into the local application
+'-- -------------------------------------------------------------------------------------------------------------------------------------
+Public Function MailClientIsAvailable(ByRef lngErrNo As Long, _
+                                      ByRef strErrDesc As String, _
+                                      ByRef strMailClientInUse As String, _
+                                      ByRef bolMailClientOverriden As Boolean) As Boolean
+Dim clsMC As clsMailClient
+    On Error GoTo ErrHandler
+    Set clsMC = New clsMailClient
+    With clsMC
+    '-- Check to see if the mail client application is open
+        If .CheckMailClientState = True Then
+            MailClientIsAvailable = True
+            strMailClientInUse = .CurrentMailClient
+            bolMailClientOverriden = .MailClientOverridden
+        Else
+        '-- Pass the error back to the calling code
+            MailClientIsAvailable = False
+            lngErrNo = .ErrNo
+            strErrDesc = .ErrDesc
+        End If
+    End With
+ExitPoint:
+    On Error Resume Next
+    Set clsMC = Nothing
+    Exit Function
+ErrHandler:
+    lngErrNo = clsMC.ErrNo
+    strErrDesc = clsMC.ErrDesc
+    Resume ExitPoint
+End Function
+'-- -------------------------------------------------------------------------------------------------------------------------------------
+'-- CLASS USAGE EXAMPLES
+'-- -------------------------------------------------------------------------------------------------------------------------------------
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- APPLICATION LAUNCH
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Public Sub OnLaunchOfApplication()
+Dim lngErrNo As Long
+Dim strErrDesc As String
+Dim strMailClientInUse As String
+Dim bolMailClientOverriden As Boolean
+    If MailClientIsAvailable(lngErrNo, strErrDesc, strMailClientInUse, bolMailClientOverriden) = False Then
+    '-- Application should notify user at this point to allow them to open their mail client
+        MsgBox "Error: " & lngErrNo & " - " & strErrDesc, vbCritical + vbOKOnly, "Mail Client Issue - " & strMailClientInUse
+    End If
+End Sub
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- SEND GENERIC EMAIL TEMPLATE
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'Public Function SendGenericEMailTemplate() As Boolean
+'Dim clsMC As clsMailClient
+'    On Error GoTo ErrHandler
+'    Set clsMC = New clsMailClient
+'    With clsMC
+'    '-- Mail Client in use (this can be removed or logged if required)
+'        Debug.Print "MailClientInUse='" & .CurrentMailClient & IIf(.MailClientOverridden = True, " (Overridden)'", "'")
+'    '-- Check to see if the mail client application is open
+'        If .CheckMailClientState = True Then
+'        '-- -----------------------------------------------------------------
+'        '-- Add properties - EMail standard
+'        '-- -----------------------------------------------------------------
+'            .EMail_To = "YouCanSeeMe"
+'            .EMail_CC = "YouCanSortOfSeeMe"
+'            .EMail_BCC = "Shhh,YouCannotSeeMe"
+'            .EMail_Subject = "SubjectMatter"
+'            .EMail_Body = "IAmTheBodyOfAnEmail"
+'            .EMail_Signature = "Forgery@10EURPerTime"
+'            .EMail_HTML = True
+'            .ClearEMailPropertiesAfterCreation = True
+'        '-- -----------------------------------------------------------------
+'        '-- Add attachment(s)
+'        '-- -----------------------------------------------------------------
+'            .AttachmentAdd FileName1, DisplayUniqueName1
+'            .AttachmentAdd FileName2, DisplayUniqueName2
+'        '-- -----------------------------------------------------------------
+'        '-- Send From - Outlook
+'        '-- -----------------------------------------------------------------
+'            .EMail_OutlookFrom = "NextDoorNeighboursMailbox"
+'        '-- -----------------------------------------------------------------
+'        '-- Generate the EMail
+'        '-- -----------------------------------------------------------------
+'            If .GenerateEMail = True Then
+'            '-- Success, email generated
+'                MsgBox "Application passed onus to user"
+'            Else
+'            '-- Change to however you wish the error to be handled
+'                Debug.Print "Error On EMail Creation" & IIf(.ErrNo <> 0, "(" & .ErrProc & "/" & .ErrNo & "/" & .ErrDesc & ")", "")
+'            End If
+'        Else
+'        '-- Change to however you wish the error to be handled
+'            Debug.Print "Error On Client Opening, Client not available (" & .CurrentMailClientState & ") = " & IIf(.ErrNo <> 0, "(" & .ErrProc & "/" & .ErrNo & "/" & .ErrDesc & ")", "")
+'        End If
+'    End With
+'ExitPoint:
+'    On Error Resume Next
+'    Set clsMC = Nothing
+'    Exit Function
+'ErrHandler:
+'    Debug.Print Err.Number & " - " & Err.Description
+'    Resume ExitPoint
+'End Function
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- SEND GENERIC EMAIL EXAMPLE
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Public Function SendGenericEMailExample() As Boolean
+Dim clsMC As clsMailClient
+    On Error GoTo ErrHandler
+    Set clsMC = New clsMailClient
+    With clsMC
+    '-- Mail Client in use
+        Debug.Print "MailClientInUse='" & .CurrentMailClient & IIf(.MailClientOverridden = True, " (Overridden)'", "'")
+    '-- Check to see if the mail client application is open
+        If .CheckMailClientState = True Then
+            Debug.Print "Mail Client Available"
+        '-- Set properties for the mail
+            .EMail_To = Environ("UserName")
+            .EMail_Subject = "This is a test mail"
+            .EMail_Body = "This is a test mail"
+            .AttachmentAdd "N:\201207Unapproved.pdf", "File 1"
+            If .GenerateEMail = False Then
+                Debug.Print "Error On EMail Creation" & IIf(.ErrNo <> 0, "(" & .ErrProc & "/" & .ErrNo & "/" & .ErrDesc & ")", "")
+            End If
+        Else
+            Debug.Print "Error On Client Opening, Client not available (" & .CurrentMailClientState & ") = " & IIf(.ErrNo <> 0, "(" & .ErrProc & "/" & .ErrNo & "/" & .ErrDesc & ")", "")
+        End If
+    End With
+ExitPoint:
+    On Error Resume Next
+    Set clsMC = Nothing
+    Exit Function
+ErrHandler:
+    Debug.Print Err.Number & " - " & Err.Description
+    Resume ExitPoint
+End Function
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- SEND LOTUS NOTES EMAIL FROM OTHER MAILBOX EXAMPLE
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+Public Function SendMailFromLNOtherMailBox() As Boolean
+Dim clsMC As clsMailClient
+    On Error GoTo ErrHandler
+    Set clsMC = New clsMailClient
+    With clsMC
+    '-- Mail Client in use
+        Debug.Print "MailClientInUse='" & .CurrentMailClient & IIf(.MailClientOverridden = True, " (Overridden)'", "'")
+    '-- Check to see if the mail client application is open
+        If .CheckMailClientState = True Then
+            Debug.Print "Mail Client Available"
+        '-- Mailbox addition
+            .LN_MailboxEMailAddress = "IFSLocalApplications@clearstream.com"
+            .LN_MailGroupFileName = "CN=NSGDBM4/OU=SPOKE/O=GDB"
+            .LN_MailGroupFileLocation = "MailIn05\ifslocalapplications.nsf"
+        '-- Set properties for the mail
+            .EMail_To = Environ("UserName")
+            .EMail_Subject = "This is a test mail"
+            .EMail_Body = "This is a test mail"
+            .AttachmentAdd "N:\201207Unapproved.pdf", "File 1"
+            If .GenerateEMail = False Then
+                Debug.Print "Error On EMail Creation" & IIf(.ErrNo <> 0, "(" & .ErrProc & "/" & .ErrNo & "/" & .ErrDesc & ")", "")
+            End If
+        Else
+            Debug.Print "Error On Client Opening, Client not available (" & .CurrentMailClientState & ") = " & IIf(.ErrNo <> 0, "(" & .ErrProc & "/" & .ErrNo & "/" & .ErrDesc & ")", "")
+        End If
+    End With
+ExitPoint:
+    On Error Resume Next
+    Set clsMC = Nothing
+    Exit Function
+ErrHandler:
+    Debug.Print Err.Number & " - " & Err.Description
+    Resume ExitPoint
+End Function

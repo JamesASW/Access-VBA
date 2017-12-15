@@ -1,0 +1,561 @@
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "clsForm"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Option Compare Database
+Option Explicit
+
+' form being handled
+Private mctlThis As Control
+Private mfrmThis As Form
+
+' keep data until closed
+Private mrst As DAO.Recordset
+Private mstrQuery As String
+
+' key for form
+Private mlngKey As Long
+
+' keep track of parameters for query
+Private mvarParm() As Variant
+Private mbolParm As Boolean
+
+Private mstrKeySeparator As String
+
+Private mlngBackColor As Long
+Private mlngEditColor As Long
+Private mlngMandColor As Long
+
+' formats
+Private mstrFormatDouble As String
+Private mstrFormatInt As String
+Private mstrFormatLong As String
+Private mstrFormatDate As String
+
+' columns not bound to query
+Private mstrNotBound As String
+
+' associated button set?
+Private mclsButton As clsButton
+
+' linked values
+Private mclsLinkedForm As clsForm
+
+' columns on this form and mappings to linked form
+Private mstrLinkedSource() As String
+Private mstrLinkedTarget() As String
+Private mvarLinkedValue() As Variant
+Private mbolLinked As Boolean
+
+Private Declare Function LockWindowUpdate Lib "user32" (ByVal hwndLock As Long) As Long
+
+' add or remove column from NotBound list
+Public Sub frmSetNotBound(strColumn As String, Optional bolBound)
+
+    Dim intPtr As Integer
+
+    ' need to tokenise so partial matches fail
+    strColumn = ";" & LCase(strColumn) & ";"
+    intPtr = InStr(mstrNotBound, strColumn)
+    If bolBound Then
+        If intPtr > 0 Then
+            mstrNotBound = Left(mstrNotBound, intPtr - 1) & Mid(mstrNotBound, intPtr + Len(strColumn))
+        End If
+    ElseIf intPtr = 0 Then
+        mstrNotBound = mstrNotBound & strColumn
+    End If
+
+End Sub
+
+Public Sub frmSetMandatory(strColumn As String, Optional bolMandatory As Boolean = True)
+
+    Dim ctl As Control
+
+    Debug.Print "Mandatory " & mstrQuery & " " & strColumn & " " & bolMandatory
+    
+    ' refresh off
+    LockWindowUpdate mfrmThis.hWnd
+
+    strColumn = LCase(strColumn)
+    For Each ctl In mfrmThis.Controls
+        With ctl
+            If strColumn = "" Then
+            
+                Select Case .ControlType
+            
+                Case acTextBox, acCheckBox, acComboBox
+                    ctl.Locked = False
+                    If bolMandatory Then
+                        ctl.BackColor = mlngMandColor
+                    Else
+                        ctl.BackColor = mlngEditColor
+                    End If
+                
+                End Select
+                
+            ElseIf LCase(ctl.Name) = strColumn Then
+                ctl.Locked = False
+                ctl.BackColor = mlngMandColor
+                Exit For
+            End If
+        End With
+    Next
+    
+    ' refresh on
+    LockWindowUpdate 0&
+    
+    Set ctl = Nothing
+
+End Sub
+
+Public Sub frmSetLock(bolLock As Boolean, Optional strColumn As String)
+
+    Dim ctl As Control
+
+    Debug.Print "Lock Form " & mstrQuery & " " & bolLock & " " & strColumn
+    
+    ' refresh off
+    LockWindowUpdate mfrmThis.hWnd
+    
+    strColumn = LCase(strColumn)
+    For Each ctl In mfrmThis.Controls
+        With ctl
+            If strColumn = "" Then
+                
+                Select Case .ControlType
+            
+                Case acTextBox, acCheckBox, acComboBox
+                    ctl.Locked = bolLock
+                    If bolLock Then
+                        ctl.BackColor = mlngBackColor
+                    Else
+                        ctl.BackColor = mlngEditColor
+                    End If
+                
+                End Select
+                
+            ElseIf LCase(ctl.Name) = strColumn Then
+                ctl.Locked = bolLock
+                Exit For
+            End If
+        End With
+    Next
+    
+    ' refresh on
+    LockWindowUpdate 0&
+    
+    Set ctl = Nothing
+
+End Sub
+
+Public Sub frmClear()
+
+    Dim ctl As Control
+    
+    Debug.Print "Clear Form " & mstrQuery
+    
+    ' refresh off
+    LockWindowUpdate mfrmThis.hWnd
+
+    For Each ctl In mfrmThis.Controls
+        With ctl
+            
+            Select Case .ControlType
+            
+            Case acCheckBox
+                ctl = False
+                
+            Case acTextBox
+                ctl = ""
+                
+            Case acComboBox
+                ctl = 0
+                
+            End Select
+        End With
+    Next
+    
+    ' reset buttons?
+    If Not mclsButton Is Nothing Then
+        Call mclsButton.cmdReset
+    End If
+    
+    ' refresh on
+    LockWindowUpdate 0&
+    
+    Set ctl = Nothing
+
+End Sub
+
+Public Sub frmSetParameter(intParm As Integer, varValue As Variant)
+
+    ' is parm array dimensioned?
+    If Not mbolParm Then
+        ReDim Preserve mvarParm(0)
+        mbolParm = True
+    End If
+    
+    ' expand?
+    If intParm > UBound(mvarParm) Then
+        ReDim Preserve mvarParm(intParm)
+    End If
+    
+    ' set
+    mvarParm(intParm) = varValue
+    
+End Sub
+
+Public Sub frmPopulate()
+    
+    Dim qdf As QueryDef
+    Dim ctl As Control
+    Dim intPtr As Integer
+
+    ' set up query
+    Set qdf = CurrentDb.QueryDefs(mstrQuery)
+    If mbolParm Then
+        Do While intPtr <= UBound(mvarParm) And intPtr < qdf.Parameters.Count
+            Select Case qdf.Parameters(intPtr).Type
+        
+            Case dbInteger
+                qdf.Parameters(intPtr) = CInt(mvarParm(intPtr))
+                
+            Case dbLong
+                qdf.Parameters(intPtr) = CLng(mvarParm(intPtr))
+                
+            Case dbDouble
+                qdf.Parameters(intPtr) = CDbl(mvarParm(intPtr))
+            
+            Case dbDate
+                qdf.Parameters(intPtr) = CDate(mvarParm(intPtr))
+                
+            Case Else
+                qdf.Parameters(intPtr) = mvarParm(intPtr)
+            
+            End Select
+        
+            intPtr = intPtr + 1
+        Loop
+    End If
+    
+    ' assign to result set
+    Set mrst = qdf.OpenRecordset(dbOpenForwardOnly)
+    If mrst.EOF Then
+        Call frmClear
+    Else
+            
+        ' refresh off
+        LockWindowUpdate mfrmThis.hWnd
+
+        For Each ctl In mfrmThis.Controls
+            With ctl
+                
+                ' ignore columns not bound to query
+                If InStr(mstrNotBound, ";" & LCase(.Name) & ";") = 0 Then
+                    Select Case .ControlType
+            
+                    Case acCheckBox
+                        Debug.Print "check box " & .Name
+                    
+                        If IsNumeric(mrst.Fields(.Name).value) Then
+                            ctl = CLng(mrst.Fields(.Name).value) = 0
+                        Else
+                            ctl = InStr("y1", LCase(Left(mrst.Fields(.Name).value, 1))) > 0
+                        End If
+                
+                    Case acTextBox
+                        Debug.Print "text box " & .Name
+                    
+                        Select Case mrst.Fields(.Name).Type
+                    
+                        Case dbInteger, dbLong
+                            ctl.Format = mstrFormatInt
+                            ctl.TextAlign = 3
+                
+                        Case dbDouble
+                            ctl.Format = mstrFormatDouble
+                            ctl.TextAlign = 3
+            
+                        Case dbDate
+                            ctl.Format = mstrFormatDate
+                            ctl.TextAlign = 1
+                        
+                        Case Else
+                    
+                        End Select
+                    
+                        ctl = mrst.Fields(.Name)
+                    
+                    Case acComboBox
+                        Debug.Print "combo box " & .Name
+                    
+                        ctl = mrst.Fields(.Name)
+                    
+                    End Select
+                End If
+            End With
+        Next
+    
+        ' refresh on
+        LockWindowUpdate 0&
+    End If
+   
+    Set ctl = Nothing
+    qdf.Close
+    Set qdf = Nothing
+    
+End Sub
+
+Public Function frmUpdate() As String
+
+    Dim ctl As Control
+    Dim strSQL As String
+
+    For Each ctl In mfrmThis.Controls
+    
+        With ctl
+    
+            Select Case .ControlType
+            
+            Case acCheckBox
+            
+                Select Case mrst.Fields(.Name).Type
+                
+                Case dbInteger, dbLong, dbDouble
+                    strSQL = strSQL & ", " & mrst.Fields(.Name).value
+                
+                Case Else
+                    If ctl Then
+                        strSQL = strSQL & ", 'Y'"
+                    Else
+                        strSQL = strSQL & ", 'N'"
+                    End If
+                End Select
+                
+            Case acTextBox
+
+                Select Case CLng(ctl.Tag)
+            
+                Case dbInteger, dbLong, dbDouble
+                    strSQL = strSQL & ", " & CStr(ctl)
+            
+                Case dbDate
+                    strSQL = strSQL & ", '" & ctl & "'"
+                
+                Case Else
+                    strSQL = strSQL & ", '" & ctl & "'"
+                    
+                End Select
+            End Select
+        End With
+    Next
+    frmUpdate = strSQL
+    
+    Set ctl = Nothing
+
+End Function
+
+Public Function frmSetLinkedColumn(strSource As String, Optional strTarget As String) As Integer
+
+    Dim intPtr As Integer
+    
+    If mbolLinked Then
+        intPtr = UBound(mstrLinkedSource) + 1
+        ReDim Preserve mstrLinkedSource(intPtr)
+        ReDim Preserve mstrLinkedTarget(intPtr)
+        ReDim Preserve mvarLinkedValue(intPtr)
+    Else
+        ReDim mstrLinkedSource(intPtr)
+        ReDim mstrLinkedTarget(intPtr)
+        ReDim mvarLinkedValue(intPtr)
+        mbolLinked = True
+    End If
+    
+    mstrLinkedSource(intPtr) = LCase(strSource)
+    
+    ' assume same column names
+    If strTarget = "" Then
+        mstrLinkedTarget(intPtr) = LCase(strSource)
+    Else
+        mstrLinkedTarget(intPtr) = LCase(strTarget)
+    End If
+    
+    frmSetLinkedColumn = intPtr
+
+End Function
+
+Public Function frmGetLinkedValue(strColumn As String)
+
+    Dim intPtr As Integer
+    
+    If mbolLinked Then
+        
+        strColumn = LCase(strColumn)
+        For intPtr = 0 To UBound(mstrLinkedSource)
+            If mstrLinkedSource(intPtr) = strColumn Then
+                frmGetLinkedValue = mvarLinkedValue(intPtr)
+                Exit Function
+            End If
+        Next
+    End If
+
+End Function
+
+Public Function frmSetLinkedValue(strColumn As String, varValue As Variant) As Boolean
+
+    Dim intPtr As Integer
+    
+    If mbolLinked Then
+        
+        strColumn = LCase(strColumn)
+        For intPtr = 0 To UBound(mstrLinkedSource)
+            If mstrLinkedSource(intPtr) = strColumn Then
+                mvarLinkedValue(intPtr) = varValue
+                frmSetLinkedValue = True
+                Exit Function
+            End If
+        Next
+    End If
+
+End Function
+
+Public Function frmGetColumnValue(strColumn As String) As Variant
+
+    Dim ctl As Control
+
+    strColumn = LCase(strColumn)
+    For Each ctl In mfrmThis.Controls
+        If LCase(ctl.Name) = strColumn Then
+            frmGetColumnValue = ctl
+            Exit For
+        End If
+    Next
+    
+    Set ctl = Nothing
+
+End Function
+
+Public Function frmSetColumnValue(strColumn As String, varValue As Variant) As Boolean
+
+    Dim ctl As Control
+
+    strColumn = LCase(strColumn)
+    For Each ctl In mfrmThis.Controls
+        If LCase(ctl.Name) = strColumn Then
+            ctl = varValue
+            frmSetColumnValue = True
+            Exit For
+        End If
+    Next
+    
+    Set ctl = Nothing
+
+End Function
+
+Public Function frmGetLinkedForm() As clsForm
+    Set frmGetLinkedForm = mclsLinkedForm
+End Function
+
+Public Property Let MandatoryColor(value As Long)
+    mlngMandColor = value
+End Property
+
+Public Property Let EditColor(value As Long)
+    mlngEditColor = value
+End Property
+
+Public Property Let BackColor(value As Long)
+    mlngBackColor = value
+End Property
+
+Public Property Let KeySeparator(value As String)
+    mstrKeySeparator = value
+End Property
+
+Public Property Let FormatDouble(value As String)
+    mstrFormatDouble = value
+End Property
+
+Public Property Let FormatInt(value As String)
+    mstrFormatInt = value
+End Property
+
+Public Property Let FormatDate(value As String)
+    mstrFormatDate = value
+End Property
+
+Public Property Let Query(value As String)
+    mstrQuery = value
+End Property
+
+Public Property Let Form(value As Object)
+
+    Set mctlThis = value
+    Set mfrmThis = mctlThis.Form
+    With mfrmThis
+        .Section(acDetail).BackColor = mlngBackColor
+        .ScrollBars = False
+        .RecordSelectors = False
+        .ControlBox = False
+        .NavigationButtons = False
+    End With
+
+End Property
+
+Public Property Let Buttons(value As clsButton)
+    Set mclsButton = value
+End Property
+
+Public Property Get IsLinked() As Boolean
+    IsLinked = mbolLinked
+End Property
+
+Public Property Get LinkedSource() As String()
+    LinkedSource = mstrLinkedSource
+End Property
+
+Public Property Get LinkedTarget() As String()
+    LinkedTarget = mstrLinkedTarget
+End Property
+
+Public Property Let LinkedForm(value As clsForm)
+    Set mclsLinkedForm = value
+End Property
+
+Public Property Let Key(value As Long)
+    mlngKey = value
+End Property
+
+Public Property Get Key() As Long
+    Key = mlngKey
+End Property
+
+Private Sub Class_Initialize()
+
+    ' default formats
+    mstrFormatDouble = "#,##0.00"
+    mstrFormatInt = "#,##0"
+    mstrFormatDate = "yyyy-mm-dd"
+
+    ' composite key separator
+    mstrKeySeparator = "|"
+
+    ' background
+    mlngBackColor = 16250871
+    mlngEditColor = vbWhite
+    mlngMandColor = vbYellow
+     
+End Sub
+
+Private Sub Class_Terminate()
+
+    Debug.Print "Closing Form " & mstrQuery
+    'mrst.Close
+    Set mrst = Nothing
+
+End Sub

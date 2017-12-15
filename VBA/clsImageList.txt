@@ -1,0 +1,303 @@
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "clsImageList"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Option Compare Database
+Option Explicit
+'~ ****************************************************************************************************************************************
+'  INFORMATION
+'  Details and instrutions can be found at the bottom of the modules.
+'  Class Name:  clsImageList
+'  Description: Manage an imagelist
+'  Change History: Created - 22/06/2016 to 22/06/2016
+'~ ****************************************************************************************************************************************
+
+'~ ***************************************************************
+'  DECLARATIONS AND SETUP
+'~ ***************************************************************
+Private mimgList As ImageList
+Private mRSErrors As ADODB.Recordset
+
+'~ ***************************************************************
+Private Sub Class_Initialize()
+On Error GoTo ErrorProcedure
+
+'~ Set up Class
+'------------------------------------------------------------
+    fCreateErrorRecordset mRSErrors '~ Build Error Recordset
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Sub
+ErrorProcedure:
+    Err.Raise Err.Number
+    Resume ExitProcedure
+End Sub
+'~ ***************************************************************
+Private Sub Class_Terminate()
+On Error Resume Next
+    
+'~ Close and clear objects
+'------------------------------------------------------------
+    ClearAll
+    mRSErrors.Close
+    Set mRSErrors = Nothing
+'------------------------------------------------------------
+
+End Sub
+
+'~ ***************************************************************
+'  Public Procedures
+'~ ***************************************************************
+Public Function Add(strName As String, strImagePath As String) As Boolean
+On Error GoTo ErrorProcedure
+    Dim intError As Integer
+    
+'~ Load a single image into image list
+'------------------------------------------------------------
+    If LoadPictureTest(strImagePath, intError) Then
+        Debug.Print strName
+        mimgList.ListImages.Add mimgList.ListImages.Count + 1, strName, LoadPicture(strImagePath)
+        Add = True
+    Else
+        Select Case True
+         Case Not FileExists(strImagePath)
+            Err.Raise 10001, , "Image doesn't exist"
+         Case FileLocked(strImagePath)
+            Err.Raise 10002, , "Image is locked"
+         Case True
+            Err.Raise intError
+        End Select
+    End If
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+
+    fLogClassError Err.Number, Err.Description, "Public Function Add"
+    Resume ExitProcedure
+    Resume
+End Function
+'~ ***************************************************************
+Public Function AddUsingSQL(ByVal strSQL As String, ByVal strImageNameFieldName As String, ByVal strImagePathFieldName As String) As Boolean
+On Error GoTo ErrorProcedure
+    Dim RS As DAO.Recordset
+    
+'~ Load all images in a recordset
+'------------------------------------------------------------
+    Set RS = CurrentDb.OpenRecordset(strSQL, dbReadOnly)
+    AddUsingSQL = AddUsingRecordset(RS, strImageNameFieldName, strImagePathFieldName)
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function AddUsingRecordset"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function AddUsingRecordset(ByRef RS As Object, ByVal strImageNameFieldName As String, ByVal strImagePathFieldName As String) As Boolean
+On Error GoTo ErrorProcedure
+
+'~ Load all images in a recordset
+'------------------------------------------------------------
+    AddUsingRecordset = True
+    Do Until RS.EOF
+        If Add(RS.Fields(strImageNameFieldName), RS.Fields(strImagePathFieldName)) Then
+            RS.MoveNext
+        Else
+            AddUsingRecordset = False
+            Exit Do
+        End If
+    Loop
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function AddUsingRecordset"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function LoadPictureTest(strFilePath As String, ByRef intReturnError As Integer) As Boolean
+On Error Resume Next
+    Dim intIndex As Integer
+    Dim a As Integer
+    
+'~ Load picture test (to stop crazy errors, check first)
+'------------------------------------------------------------
+    intIndex = mimgList.ListImages.Count + 1
+    mimgList.ListImages.Add intIndex, "LoadImageTest", LoadPicture(strFilePath)
+    
+    For a = 1 To mimgList.ListImages.Count
+        If mimgList.ListImages(a).Key = "LoadImageTest" Then
+            mimgList.ListImages.Remove a
+        End If
+    Next
+    
+    '~ Check if error exists giving the result
+    intReturnError = Err.Number
+    LoadPictureTest = (Err.Number = 0)
+'------------------------------------------------------------
+
+End Function
+'~ ***************************************************************
+Public Function OverlayAdd(strNewImageName As String, strImageName1 As String, strImageName2 As String) As Boolean
+On Error GoTo ErrorProcedure
+
+'~ Overlay an image onto another and create
+'------------------------------------------------------------
+    mimgList.ListImages.Add mimgList.ListImages.Count + 1, strNewImageName, mimgList.Overlay(strImageName1, strImageName2)
+    OverlayAdd = True
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function ResetErrorRecordset"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Sub ClearAll()
+On Error GoTo ErrorProcedure
+    Dim a As Long
+    
+'~ Clear all nodes from treeview
+'------------------------------------------------------------
+    Do Until a = mimgList.ListImages.Count
+        mimgList.ListImages.Remove 1
+    Loop
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Sub
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Sub ClearAll"
+    Resume ExitProcedure
+End Sub
+'~ ***************************************************************
+Public Function ResetErrorRecordset() As Boolean
+On Error GoTo ErrorProcedure
+
+'~ Delete all errors from the Error RS (cheat and just rebuild... its simpler)
+'------------------------------------------------------------
+    mRSErrors.Close
+    Set mRSErrors = Nothing
+    fCreateErrorRecordset mRSErrors
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    fLogClassError Err.Number, Err.Description, "Public Function ResetErrorRecordset"
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Private Function FileLocked(strFilePath As String) As Boolean
+   On Error Resume Next
+   
+'~ Check whether a file is open
+'------------------------------------------------------------
+   Open strFilePath For Binary Access Read Write Lock Read Write As #1
+   Close #1
+   
+   '~ If error occured, it's open
+   If Err.Number <> 0 Then
+      FileLocked = True
+   End If
+End Function
+'~ ***************************************************************
+Private Function FileExists(strFilePath As String) As Boolean
+   On Error Resume Next
+   
+'~ Check whether a file exists
+'------------------------------------------------------------
+    FileExists = Not (Dir(strFilePath) = "")
+'------------------------------------------------------------
+End Function
+'~ ***************************************************************
+'  Private Procedures
+'~ ***************************************************************
+Private Function fCreateErrorRecordset(ByRef RS As ADODB.Recordset) As Boolean
+On Error GoTo ErrorProcedure
+
+'~ Create new recordset
+'------------------------------------------------------------
+    Set RS = New ADODB.Recordset
+    
+    With RS
+    '-- Set a memory only recordset
+        Set .ActiveConnection = Nothing
+        .CursorLocation = adUseClient
+        .LockType = adLockBatchOptimistic
+    
+    '-- Add new fields
+        With .Fields
+            .Append "ErrorNumber", adVariant
+            .Append "ErrorMessage", adVariant
+            .Append "ErrorProcedure", adVariant
+            .Append "ErrorTime", adVariant
+        End With
+    
+    '-- Open the recordset
+        .Open
+    End With
+    
+    fCreateErrorRecordset = True
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    '~ hmmm what to do....
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Private Function fLogClassError(ByVal lngErrorNumber As Long, ByVal strErrorMessage As String, ByVal strProcedure As String) As Boolean
+On Error GoTo ErrorProcedure
+
+'~ Log Errors into a recordset
+'------------------------------------------------------------
+    With mRSErrors
+        .AddNew
+        .Fields(0) = lngErrorNumber
+        .Fields(1) = strErrorMessage
+        .Fields(2) = strProcedure
+        .Fields(3) = Format(Now(), "yyyy-mm-dd hh:nn:ss")
+        .Update
+    End With
+'------------------------------------------------------------
+
+ExitProcedure:
+Exit Function
+ErrorProcedure:
+    Err.Raise Err.Number
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+'  PROPERTIES
+'~ ***************************************************************
+Public Property Get ImageList() As ImageList
+    Set ImageList = mimgList
+End Property
+
+Public Property Let ImageList(ByVal imgList As ImageList)
+    Set mimgList = imgList
+End Property
+
+Public Property Get Errors() As ADODB.Recordset
+    Set Errors = mRSErrors.Clone
+End Property
+'~ ****************************************************************************************************************************************
+'   **** MOST IMPORTANT NOTE OF THE IMAGELIST CLASS ****
+'   1. Be sure to unlink ALL objects linked to the imagelist before terminating the imagelist. Failure to do so can cause an access crash
+'   2. Unique TEXT image name please...
+'   3. Clear Error RS using procedure ResetErrorRecordset after using imagelist please. Otherwise it will store errors continuously
+'   4. 3 Methods of loading images (Add, AddUsingSQL, AddUsingRecordset)
+'~ ****************************************************************************************************************************************

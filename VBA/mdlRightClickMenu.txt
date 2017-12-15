@@ -1,0 +1,430 @@
+Attribute VB_Name = "mdlRightClickMenu"
+Option Compare Database
+Option Explicit
+'-----------------------------------------------------------------
+'~ Module Name: mdlRightClickMenu
+'~ Description: A place for all right click menu procedures
+'~ Created 02/09/2016 09:33
+'~ References: Microsoft Office 14.0 Library
+'-----------------------------------------------------------------
+
+'~ ***************************************************************
+'   Module / Form Variables and Declaration
+'~ ***************************************************************
+Private Const cstrModule As String = "mdlRightClickMenu"
+
+'~ ***************************************************************
+'   Public Functions
+'~ ***************************************************************
+'~ ***************************************************************
+Public Function LaunchViaRightClick(ByVal booDefaultUser As Boolean) As Boolean
+Const cstrProcedure As String = "LaunchViaRightClick"
+On Error GoTo ErrorProcedure
+'---------------------------
+    Dim strAppID As String
+    Dim strEnvID As String
+    Dim strUserID As String
+    
+'~ Launch via right click menu
+'------------------------------------------
+    strAppID = SYSVarGetText(True, "@strAppID")
+    strEnvID = SYSVarGetText(True, "@strEnvID")
+    
+    If booDefaultUser Then
+        strUserID = gstrUserID
+    Else
+        strUserID = InputBox("Enter User ID for simulation", "Admin Function: Execute as User")
+    End If
+    
+    If Not fIsNothing(strUserID) Then
+        LaunchApp strAppID, strEnvID, strUserID
+    End If
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume
+End Function
+'~ ***************************************************************
+Public Function UpdateFavourite(ByVal strAE_ID As String, ByVal booAddFav As Boolean) As Boolean
+Const cstrProcedure As String = "UpdateFavourite"
+On Error GoTo ErrorProcedure
+'---------------------------
+    Dim strSQL As String
+    
+'~ Update Favourite choice
+'------------------------------------------
+    strSQL = "EXEC dbo.uspChangeFavourites '" & strAE_ID & "', '" & gstrUserID & "' ," & booAddFav
+
+    If OpenSQLServerConnection(gclsDS) Then
+        If gclsDS.ExecuteSQL(strSQL) Then
+            Form_frmAPPMain.LoadAppListview
+        Else
+            MsgBox "An error occurred while updating the favourites choice." & vbCrLf & "If this persists, please contact Local Applications", vbCritical + vbOKOnly, gstrAppNameShort
+            fError cstrModule, cstrProcedure, gclsDS.ErrNo, gclsDS.ErrDesc, False
+        End If
+    Else
+        MsgBox "An error occurred while connecting to Gateway." & vbCrLf & "If this persists, please contact Local Applications", vbCritical + vbOKOnly, gstrAppNameShort
+    End If
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume
+End Function
+
+'~ ***************************************************************
+'   Public Subs
+'~ ***************************************************************
+Public Sub DeleteBar(ByVal strBarName As String)
+Const cstrProcedure As String = "DeleteBar"
+On Error GoTo ErrorProcedure
+'---------------------------
+
+'~ Delete command bar
+'------------------------------------------
+    On Error Resume Next '~ In case it doesn't exist
+    CommandBars(strBarName).Delete
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Sub
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume
+End Sub
+'~ ***************************************************************
+Public Sub CreateMainRightClickMenu()
+Const cstrProcedure As String = "CreateMainRightClickMenu"
+On Error GoTo ErrorProcedure
+'---------------------------
+    Dim cbr As CommandBar
+    Dim cbb As CommandBarButton
+    Dim strMenuName As String
+    Dim booAdmin As Boolean
+    Dim RS As DAO.Recordset
+    Dim booFav As Boolean
+    
+'~ Create Import Log Right Click Menu
+'------------------------------------------
+    '~ Get variables
+    strMenuName = "MainRightClickMenu"
+    
+    Set RS = CurrentDb.OpenRecordset("qryRCM0010", dbReadOnly)
+    If Not RS.EOF Then
+        booAdmin = RS.Fields("USR_ADMIN")
+        booFav = RS.Fields("FAV")
+        
+        'Delete the menu if it already exists
+        DeleteBar strMenuName
+        
+        'Create a new menu
+        Set cbr = CommandBars.Add(strMenuName, msoBarPopup)
+        With cbr
+        'http://www.outlookexchange.com/articles/toddwalker/BuiltInOLKIcons.asp
+            Set cbb = .Controls.Add(msoControlButton)
+            With cbb
+                .Caption = "Launch"
+                .Style = msoButtonIconAndCaption
+                .FaceId = 1074
+                .OnAction = "=LaunchViaRightClick(True)"
+            End With
+            
+            If booAdmin Then
+                Set cbb = .Controls.Add(msoControlButton)
+                With cbb
+                    .Caption = "Launch as User (Admin Simulation)"
+                    .Style = msoButtonIconAndCaption
+                    .FaceId = 1074
+                    .OnAction = "=LaunchViaRightClick(False)"
+                End With
+            End If
+            
+            Set cbb = .Controls.Add(msoControlButton)
+            With cbb
+                .Style = msoButtonIconAndCaption
+                If booFav Then
+                    .Caption = "Remove As Favourite"
+                    .FaceId = 330
+                    .OnAction = "=UpdateFavourite('" & RS.Fields("AE_ID") & "', False)"
+                Else
+                    .Caption = "Add As Favourite"
+                    .FaceId = 481
+                    .OnAction = "=UpdateFavourite('" & RS.Fields("AE_ID") & "', True)"
+                End If
+            End With
+        End With
+        cbr.ShowPopup
+    Else
+        MsgBox "Could not determine details" & vbCrLf & "If this persists, please contact Local Applications", vbCritical + vbOKOnly, gstrAppNameShort
+    End If
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+    RS.Close
+    Set RS = Nothing
+Exit Sub
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume
+End Sub
+'~ ***************************************************************
+Public Sub CreateLogRightClickMenu(ByVal intFilterOption As Integer, ByVal strField As String, ByVal strCurrentValue As String)
+Const cstrProcedure As String = "CreateLogRightClickMenu"
+On Error GoTo ErrorProcedure
+'---------------------------
+    Dim cbr As CommandBar
+    Dim cbb As CommandBarButton
+    Dim strMenuName As String
+        
+'~ Create Import Log Right Click Menu
+'------------------------------------------
+    '~ Get variables
+    strMenuName = "LogRightClickMenu"
+
+    'Delete the menu if it already exists
+    DeleteBar strMenuName
+    
+    'Create a new menu
+    Set cbr = CommandBars.Add(strMenuName, msoBarPopup)
+    With cbr
+    'http://www.outlookexchange.com/articles/toddwalker/BuiltInOLKIcons.asp
+        Set cbb = .Controls.Add(msoControlButton)
+        With cbb
+            .Caption = "Copy '" & strCurrentValue & "'"
+            .Style = msoButtonIconAndCaption
+            .FaceId = 19
+            .OnAction = "=CopyToClipboard('" & strCurrentValue & "')"
+        End With
+        
+        Set cbb = .Controls.Add(msoControlButton)
+        cbb.BeginGroup = True
+        With cbb
+            .Caption = "Equals '" & strCurrentValue & "'"
+            .Style = msoButtonIconAndCaption
+            .OnAction = "=LogFilter(" & intFilterOption & ",'" & Replace(Replace(strField, "«", ""), "»", "") & "','" & Replace(strCurrentValue, "'", "''") & "')"
+        End With
+        
+        Set cbb = .Controls.Add(msoControlButton)
+        With cbb
+            .Caption = "Does Not Equals '" & strCurrentValue & "'"
+            .Style = msoButtonIconAndCaption
+            .OnAction = "=LogFilter(" & intFilterOption * -1 & ",'" & Replace(Replace(strField, "«", ""), "»", "") & "','" & Replace(strCurrentValue, "'", "''") & "')"
+        End With
+        
+        If intFilterOption > 1 Then
+            Set cbb = .Controls.Add(msoControlButton)
+            With cbb
+                .Caption = "Greater than or Equals '" & strCurrentValue & "'"
+                .Style = msoButtonIconAndCaption
+                .OnAction = "=LogFilter(" & intFilterOption + 10 & ",'" & Replace(Replace(strField, "«", ""), "»", "") & "','" & Replace(strCurrentValue, "'", "''") & "')"
+            End With
+            
+            Set cbb = .Controls.Add(msoControlButton)
+            With cbb
+                .Caption = "Less than or Equals '" & strCurrentValue & "'"
+                .Style = msoButtonIconAndCaption
+                .OnAction = "=LogFilter(" & intFilterOption + 10 * -1 & ",'" & Replace(Replace(strField, "«", ""), "»", "") & "','" & Replace(strCurrentValue, "'", "''") & "')"
+            End With
+        End If
+    End With
+    
+    cbr.ShowPopup
+'------------------------------------------
+
+ExitProcedure:
+
+On Error Resume Next
+Exit Sub
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume
+End Sub
+'~ ***************************************************************
+Public Sub CreateUserRightClickMenu(ByVal intFilterOption As Integer, ByVal strField As String, ByVal strCurrentValue As String)
+Const cstrProcedure As String = ""
+On Error GoTo ErrorProcedure
+'---------------------------
+    Dim cbr As CommandBar
+    Dim cbb As CommandBarButton
+    Dim strMenuName As String
+        
+'~ Create Import Log Right Click Menu
+'------------------------------------------
+    '~ Get variables
+    strMenuName = "UserRightClickMenu"
+
+    'Delete the menu if it already exists
+    DeleteBar strMenuName
+    
+    'Create a new menu
+    Set cbr = CommandBars.Add(strMenuName, msoBarPopup)
+    With cbr
+    'http://www.outlookexchange.com/articles/toddwalker/BuiltInOLKIcons.asp
+        Set cbb = .Controls.Add(msoControlButton)
+        With cbb
+            .Caption = "Copy '" & strCurrentValue & "'"
+            .Style = msoButtonIconAndCaption
+            .FaceId = 19
+            .OnAction = "=CopyToClipboard('" & strCurrentValue & "')"
+        End With
+        
+        Set cbb = .Controls.Add(msoControlButton)
+        cbb.BeginGroup = True
+        With cbb
+            .Caption = "Equals '" & strCurrentValue & "'"
+            .Style = msoButtonIconAndCaption
+            .OnAction = "=UserFilter(" & intFilterOption & ",'" & Replace(Replace(strField, "«", ""), "»", "") & "','" & Replace(strCurrentValue, "'", "''") & "')"
+        End With
+        
+        Set cbb = .Controls.Add(msoControlButton)
+        With cbb
+            .Caption = "Does Not Equals '" & strCurrentValue & "'"
+            .Style = msoButtonIconAndCaption
+            .OnAction = "=UserFilter(" & intFilterOption * -1 & ",'" & Replace(Replace(strField, "«", ""), "»", "") & "','" & Replace(strCurrentValue, "'", "''") & "')"
+        End With
+        
+        If intFilterOption > 1 Then
+            Set cbb = .Controls.Add(msoControlButton)
+            With cbb
+                .Caption = "Greater than or Equals '" & strCurrentValue & "'"
+                .Style = msoButtonIconAndCaption
+                .OnAction = "=UserFilter(" & intFilterOption + 10 & ",'" & Replace(Replace(strField, "«", ""), "»", "") & "','" & Replace(strCurrentValue, "'", "''") & "')"
+            End With
+            
+            Set cbb = .Controls.Add(msoControlButton)
+            With cbb
+                .Caption = "Less than or Equals '" & strCurrentValue & "'"
+                .Style = msoButtonIconAndCaption
+                .OnAction = "=UserFilter(" & intFilterOption + 10 * -1 & ",'" & Replace(Replace(strField, "«", ""), "»", "") & "','" & Replace(strCurrentValue, "'", "''") & "')"
+            End With
+        End If
+    End With
+    
+    cbr.ShowPopup
+'------------------------------------------
+
+ExitProcedure:
+
+On Error Resume Next
+Exit Sub
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume
+End Sub
+'~ ***************************************************************
+Public Sub CreateAppUserRightClickMenu(ByVal strField As String, ByVal strCurrentValue As String)
+Const cstrProcedure As String = "CreateAppUserRightClickMenu"
+On Error GoTo ErrorProcedure
+'---------------------------
+    Dim cbr As CommandBar
+    Dim cbb As CommandBarButton
+    Dim strMenuName As String
+        
+'~ Create Import Log Right Click Menu
+'------------------------------------------
+    '~ Get variables
+    strMenuName = "AppUserRightClickMenu"
+
+    'Delete the menu if it already exists
+    DeleteBar strMenuName
+    
+    'Create a new menu
+    Set cbr = CommandBars.Add(strMenuName, msoBarPopup)
+    With cbr
+    'http://www.outlookexchange.com/articles/toddwalker/BuiltInOLKIcons.asp
+        Set cbb = .Controls.Add(msoControlButton)
+        With cbb
+            .Caption = "Copy '" & strCurrentValue & "'"
+            .Style = msoButtonIconAndCaption
+            .FaceId = 19
+            .OnAction = "=CopyToClipboard('" & Replace(strCurrentValue, "'", "''") & "')"
+        End With
+    End With
+    
+    cbr.ShowPopup
+'------------------------------------------
+
+ExitProcedure:
+
+On Error Resume Next
+Exit Sub
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume
+End Sub
+'~ ***************************************************************
+Public Function CopyToClipboard(ByVal strCopy As String) As Boolean
+Const cstrProcedure As String = "CopyToClipboard"
+On Error GoTo ErrorProcedure
+    Dim clipboard As MSForms.DataObject
+'---------------------------
+    
+'------------------------------------------
+    Set clipboard = New MSForms.DataObject
+    With clipboard
+        clipboard.SetText strCopy
+        clipboard.PutInClipboard
+    End With
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume '~ Debug only
+End Function
+'~ ***************************************************************
+Public Function LogFilter(ByVal intFilterOption As Integer, ByVal strField As String, ByVal strCurrentValue As String) As Boolean
+Const cstrProcedure As String = "LogFilter"
+On Error GoTo ErrorProcedure
+'---------------------------
+    
+'------------------------------------------
+    Form_sfrmADMLogs.FilterValue intFilterOption, strField, strCurrentValue
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume '~ Debug only
+End Function
+'~ ***************************************************************
+Public Function UserFilter(ByVal intFilterOption As Integer, ByVal strField As String, ByVal strCurrentValue As String) As Boolean
+Const cstrProcedure As String = "UserFilter"
+On Error GoTo ErrorProcedure
+'---------------------------
+    
+'------------------------------------------
+    Form_sfrmADMUsers.FilterValue intFilterOption, strField, strCurrentValue
+'------------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume '~ Debug only
+End Function
+

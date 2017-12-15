@@ -1,0 +1,766 @@
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "clsMailClient"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Option Compare Database
+Option Explicit
+'-- -------------------------------------------------------------------------------------------------------------------------------------
+'-- CLASS NAME     : clsMailClient
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- DESCRIPTION    : Ability to send emails via the Lotus Notes or Microsoft Outlook mail clients
+'-- AUTHOR         : James Cronshaw (BU730/JRC)
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- CHANGE HISTORY : 05/08/2016 - Created (JRC)
+'                  : 16/08/2016 - Updated Attachment handling (JRC)
+'                  : 29/08/2016 - Removed automatic sending due to security settings (JRC)
+'                  : 02/09/2016 - Removed further code to rely on the mail client being open outside of the application/class (JRC)
+'                  : 06/09/2016 - Lotus Notes code revamped for Mailbox, multiple attachment handling & removed Domino/LN refs (JRC)
+'                  : 07/09/2016 - Version 1.0 Released (JRC)
+'                  : 08/09/2016 - Minor modification made for handling comma and semi-colon separators for recipients
+'                  : 29/11/2016 - Enhancement to allow BOTH email clients to operate (due to non-migration of shared mailboxes)
+'                  :            - Updated LN SetContentFromText to allow support of extended character sets
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- REFERENCES REQD: Microsoft Outlook (MSOUTL.OLB)
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- COMMON         : Initialize - Gets default mail client and opens a instance accordingly
+'                  : Terminate - kills objects open within the class
+'                  : RetrieveDefaultMailClient - Reads from registry to get the default mail client
+'                  : GenerateEMail - single entry point for mail generation, calls LN or OL based on default mail client value
+'                  : AttachmentAdd - adds an attachment entry to the collection (display/unique name and file name)
+'                  : AttachmentsClear - clears the attachment collection
+'                  : NonMigratedSharedMailboxSwitch - allows the calling code to switch between OL and LN (non-migrated mailboxes)
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- MS OUTLOOK     : Outlook_GenerateEmail - handles MS Outlook mail creation
+'                  : Outlook_OpenClient - attempts to use an open Outlook connection, if none exists opens a new one
+'                  : Outlook_AddAttachmentsToMailItem - adds attachments to an Outlook mailitem (based on the collection)
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- LOTUS NOTES    : LotusNotes_GenerateEmail - handles the creation of a mail item
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- PROPERTIES     : ErrNo - last captured error number within the class
+'                  : ErrDesc - last captured error description within the class
+'                  : ErrProc - Procedure within the class that last recorded an error
+'                  : CurrentMailClient - name of the mail client (Microsoft Outlook, Lotus Notes or MAIL_CLIENT_NOT_FOUND)
+'                  : CurrentMailClientState - state of the mail client (Available, Client is Locked or Client is not open)
+'                  : MailClientOverridden - If the override file was found AND a valid entry located within it
+'                  : EMail_To - name(s) of recipients the email is to be sent to
+'                  : EMail_CC - name(s) of recipients the email is to be sent as a curtesy copy
+'                  : EMail_BCC - name(s) of recipients the email is to be sent as a blind curtesy copy
+'                  : EMail_Subject - subject of the email
+'                  : EMail_Body - body text of the email
+'                  : EMail_OutlookFrom - change the name of the sender (specific to Outlook)
+'                  : EMail_HTML - True = HTML/Rich Text, False=Plain Text
+'                  : ClearEMailPropertiesAfterCreation - clear various properties once the email has been generated
+'                  : LN_MailboxEMailAddress - Lotus Notes mailin address
+'                  : LN_MailGroupFileName - Lotus Notes mailin file name (server address)
+'                  : LN_MailGroupFileLocation - Lotus Notes mailin file location (sub-directory of server)
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- -------------------------------------------------------------------------------------------------------------------------------------
+'-- Declarations
+'-- -------------------------------------------------------------------------------------------------------------------------------------
+'-- Window Handle APIs
+    Private Declare Function FindWindow Lib "user32" Alias "FindWindowA" (ByVal lpClassName As String, ByVal lpWindowName As String) As Long
+    Private Declare Function SetForegroundWindow Lib "user32" (ByVal hWnd As Long) As Long
+    Private Declare Function FindWindowEx Lib "user32" Alias "FindWindowExA" (ByVal hWnd1 As Long, ByVal hWnd2 As Long, ByVal lpsz1 As String, ByVal lpsz2 As String) As Long
+    Private Declare Function GetClassName Lib "user32" Alias "GetClassNameA" (ByVal hWnd As Long, ByVal lpClassName As String, ByVal nMaxCount As Long) As Long
+    Private Declare Function GetWindowText Lib "user32" Alias "GetWindowTextA" (ByVal hWnd As Long, ByVal lpString As String, ByVal cch As Long) As Long
+'-- Registry constants (the 2nd being a backup location if Key1 cannot be retrieved)
+    Private Const mcstrMailClient_RegKey1 As String = "HKLM\Software\Clients\Mail\"
+    Private Const mcstrMailClient_RegKey2 As String = "HKLM\Software\Wow6432Node\Clients\Mail\"
+'-- Class Name constants
+    Private Const mcstrClassName_LotusNotes As String = "NOTES"
+    Private Const mcstrClassName_MicrosoftOutlook As String = "rctrl_renwnd32"
+'-- Enum constants for mail client type
+    Private Const mcintNoMailClientFound As Integer = 0
+    Private Const mcintMicrosoftOutlook As Integer = 1
+    Private Const mcintIBMLotusNotes As Integer = 2
+'-- Enum constants for mail client state/status
+    Private Const mcintMailClientNotOpen As Integer = 0
+    Private Const mcintMailClientLocked As Integer = 1
+    Private Const mcintMailClientAvailable As Integer = 2
+'-- Module/class variables
+    Private mintMailClient As Integer
+    Private mintMailClientState As Integer
+    Private mlngErrNo As Long
+    Private mstrErrDesc As String
+    Private mstrErrProc As String
+    Private mbolClientOpen As Boolean
+    Private mcolAttachments As Collection
+    Private mstrTo As String
+    Private mstrCC As String
+    Private mstrBCC As String
+    Private mstrSubject As String
+    Private mstrBody As String
+    Private mstrFrom As String
+    Private mbolHTML As Boolean
+    Private mstrSignature As String
+    Private mbolClearPropertiesAfterCreation As Boolean
+    Private mcolRecipient As Collection
+    Private mstrMailGroupFileName As String
+    Private mstrMailGroupFileLocation As String
+    Private mbolClientOverridden As Boolean
+    Private mbolNonMigratedMailbox As Boolean
+    Private mstrMailClient As String
+'-- Microsoft Outlook Objects/Variables
+'   (While LN is using procedure-level vars, further Outlook functions will be used heavily in a future release utilising module-level vars)
+    Private molkApp As Object
+'-- Lotus Notes/Domino Objects/Variables
+    Private mstrLNMailboxEMailAddress As String
+    Private Const EMBED_ATTACHMENT As Long = 1454
+    Private Const ENC_IDENTITY_8BIT As Long = 1729
+    Private Const ENC_QUOTED_PRINTABLE = 1726
+'-- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+'-- COMMON AREA
+'-- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+Private Sub Class_Initialize()
+Dim strMailClient As String
+Dim lngFreeFile As Long
+Dim strLine As String
+    On Error GoTo ErrHandler
+    mstrErrProc = "Class_Initialize"
+'-- New collection to store attachment paths
+    Set mcolAttachments = New Collection
+'-- Attempt to locate the default mail client
+    strMailClient = RetrieveDefaultMailClient
+'-- Check to see if an Mail Client Override file exists
+    If Dir("N:\LocalApplications\MailClient.dat") <> "" Then
+    '-- Open the file
+        lngFreeFile = FreeFile
+        Open "N:\LocalApplications\MailClient.dat" For Input As #lngFreeFile
+        Do Until EOF(lngFreeFile) = True
+        '-- Always take the last line
+            Line Input #lngFreeFile, strLine
+        Loop
+    End If
+'-- Determine if we need to override the current mail client
+    Select Case strLine
+        Case "Lotus Notes", "Microsoft Outlook"
+            strMailClient = strLine
+            mbolClientOverridden = True
+        Case Else
+            mbolClientOverridden = False
+    End Select
+'-- Set the appropriate value found
+    Select Case strMailClient
+        Case "Lotus Notes"
+            mintMailClient = mcintIBMLotusNotes
+        Case "Microsoft Outlook"
+            mintMailClient = mcintMicrosoftOutlook
+        Case "MAIL_CLIENT_NOT_FOUND"
+            mintMailClient = mcintNoMailClientFound
+        Case Else
+            mintMailClient = mcintNoMailClientFound
+    End Select
+'-- Store for use later on (due to Override feature for non-migrated shared mailboxes)
+    mstrMailClient = strMailClient
+ExitPoint:
+    On Error Resume Next
+    Close #lngFreeFile
+    Exit Sub
+ErrHandler:
+'-- Something catastrophic has occurred, so raise the error back to the calling code
+    Err.Raise Err.Number, "clsMailClient_Initialize", Err.Description
+    Resume ExitPoint
+End Sub
+Private Sub Class_Terminate()
+On Error Resume Next
+    mstrErrProc = "Class_Terminate"
+    If mintMailClient = mcintMicrosoftOutlook Then
+    '-- Release handle to Outlook
+        Set molkApp = Nothing
+    End If
+'-- Release the attachments collection
+    Set mcolAttachments = Nothing
+End Sub
+Public Function CheckMailClientState() As Boolean
+Dim lngHandle As Long
+Dim hWnd As Long
+Dim lngRet As Long
+Dim strText As String
+Dim strSubFrameName As String
+    On Error GoTo ErrHandler
+    mstrErrProc = "CheckMailClientState"
+    mintMailClientState = 0
+'-- Attempt to find an open window of the selected client
+    Select Case mintMailClient
+        Case mcintMicrosoftOutlook
+        '-- Look for an instance of Outlook
+            lngHandle = FindWindow(mcstrClassName_MicrosoftOutlook, vbNullString)
+        Case mcintIBMLotusNotes
+        '-- Look for an instance of Lotus Notes
+            lngHandle = FindWindow(mcstrClassName_LotusNotes, vbNullString)
+            strSubFrameName = "NotesLogout"
+        End Select
+'-- If a window has been found
+    If lngHandle <> 0 Then
+    '-- Recurse sub-windows of the parent to see if there is a locking screen (Lotus Notes only currently)
+        hWnd = FindWindowEx(lngHandle, 0&, vbNullString, vbNullString)
+        Do Until hWnd = 0
+            strText = String(100, Chr(0))
+            lngRet = GetClassName(hWnd, strText, 100)
+            If Left(strText, lngRet) = strSubFrameName Then
+                mintMailClientState = mcintMailClientLocked
+                mlngErrNo = 10011
+                mstrErrDesc = "EMail client is locked"
+                Exit Do
+            End If
+            hWnd = FindWindowEx(lngHandle, hWnd, vbNullString, vbNullString)
+        Loop
+    '-- If no issue found at this point, then the client must be available
+        If mintMailClientState = 0 Then
+            mintMailClientState = mcintMailClientAvailable
+            CheckMailClientState = True
+        End If
+    Else
+    '-- Window not found; mail client is not open
+        mintMailClientState = mcintNoMailClientFound
+        If mintMailClient = mcintNoMailClientFound Then
+            mlngErrNo = 10002
+            mstrErrDesc = "A default mail client could not be located from the registry"
+        Else
+            mlngErrNo = 10001
+            mstrErrDesc = "The mail client is not open"
+        End If
+    End If
+ExitPoint:
+    On Error Resume Next
+    Exit Function
+ErrHandler:
+    CheckMailClientState = False
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description
+    Resume ExitPoint
+End Function
+Private Function RetrieveDefaultMailClient() As String
+Dim objWS As Object
+Dim strRegValue As String
+    On Error GoTo ErrHandler
+    mstrErrProc = "RetrieveDefaultMailClient"
+'-- Access Windows scripting
+    Set objWS = CreateObject("WScript.Shell")
+'-- Read key from registry
+    strRegValue = objWS.RegRead(mcstrMailClient_RegKey1)
+'-- Check if a value has been found
+    If strRegValue = "" Then
+    '-- Attempt the backup location
+        strRegValue = objWS.RegRead(mcstrMailClient_RegKey2)
+        If strRegValue = "" Then
+        '-- Nothing found, so raise an error
+            strRegValue = "MAIL_CLIENT_NOT_FOUND"
+            Err.Raise 10000, , "Registry Read error, no default maill client can be found"
+        End If
+    End If
+ExitPoint:
+    On Error Resume Next
+    RetrieveDefaultMailClient = strRegValue
+    Set objWS = Nothing
+    Exit Function
+ErrHandler:
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description
+    Resume ExitPoint
+End Function
+Public Function GenerateEMail() As Boolean
+Dim bolResult As Boolean
+Dim lngHandle As Long
+Dim strSeparator As String
+    On Error GoTo ErrHandler
+    mstrErrProc = "GenerateEMail"
+'-- Ensure that a recipient list has been passed in
+    If mstrTo = "" Then
+        Err.Raise 10004, , "Recipient List (Email_TO) is empty"
+    ElseIf mstrSubject = "" Then
+        Err.Raise 10010, , "Subject (Email_Subject) is empty"
+    ElseIf mstrBody = "" Then
+        Err.Raise 10007, , "Body (Email_Body) is empty"
+    End If
+'-- Check To separator
+    If InStr(1, mstrTo, ";") > 0 And mintMailClient = mcintIBMLotusNotes Then
+        mstrTo = Replace(mstrTo, ";", ",")
+    End If
+    If InStr(1, mstrTo, ",") > 0 And mintMailClient = mcintMicrosoftOutlook Then
+        mstrTo = Replace(mstrTo, ",", ";")
+    End If
+'-- Check CC separator
+    If mstrCC <> "" Then
+        If InStr(1, mstrCC, ";") > 0 And mintMailClient = mcintIBMLotusNotes Then
+            mstrCC = Replace(mstrCC, ";", ",")
+        End If
+        If InStr(1, mstrCC, ",") > 0 And mintMailClient = mcintMicrosoftOutlook Then
+            mstrCC = Replace(mstrCC, ",", ";")
+        End If
+    End If
+'-- Check BCC separator
+    If mstrBCC <> "" Then
+        If InStr(1, mstrBCC, ";") > 0 And mintMailClient = mcintIBMLotusNotes Then
+            mstrBCC = Replace(mstrBCC, ";", ",")
+        End If
+        If InStr(1, mstrBCC, ",") > 0 And mintMailClient = mcintMicrosoftOutlook Then
+            mstrBCC = Replace(mstrBCC, ",", ";")
+        End If
+    End If
+    Select Case mintMailClient
+        Case mcintMicrosoftOutlook
+        '-- Generate EMail via Microsoft Outlook
+            bolResult = Outlook_GenerateEmail
+        Case mcintIBMLotusNotes
+        '-- Generate EMail via Lotus Notes
+            If mstrLNMailboxEMailAddress <> "" Then
+                If mstrMailGroupFileLocation = "" Then
+                    Err.Raise 10012, , "Lotus Notes Group Mailbox name missing"
+                End If
+                If mstrMailGroupFileName = "" Then
+                    Err.Raise 10012, , "Lotus Notes Group Mailbox location missing"
+                End If
+            End If
+            If mstrMailGroupFileLocation <> "" And mstrMailGroupFileName <> "" And mstrLNMailboxEMailAddress = "" Then
+                Err.Raise 10014, , "Lotus Notes Group Mailbox address missing"
+            End If
+        '-- Generate EMail via Lotus Notes
+            bolResult = LotusNotes_GenerateEmail(",")
+        Case Else
+        '-- EMail has still been requested, even though the default mail client could not be resolved
+            Err.Raise 10003, , "The email client could not be determined, please check and try again"
+    End Select
+'-- If the result is a success then clear down the collection, otherwise keep in case the calling code wishes to capture
+    If bolResult = True And mbolClearPropertiesAfterCreation = True Then
+    '-- Clear the collection and create again (as the email send means we are finished with the attachment listing)
+        Call AttachmentsClear
+    '-- Clear the properties set for the mail
+        mstrTo = ""
+        mstrCC = ""
+        mstrBCC = ""
+        mstrSubject = ""
+        mstrBody = ""
+    End If
+'-- Determine which window class we need to invoke
+    Select Case mintMailClient
+        Case mcintIBMLotusNotes
+            lngHandle = FindWindow(mcstrClassName_LotusNotes, vbNullString)
+        Case mcintMicrosoftOutlook
+            lngHandle = FindWindow(mcstrClassName_MicrosoftOutlook, vbNullString)
+    End Select
+    If lngHandle <> 0 Then
+    '-- Set this window to the foreground
+        lngHandle = SetForegroundWindow(lngHandle)
+    End If
+    GenerateEMail = bolResult
+ExitPoint:
+    On Error Resume Next
+    Exit Function
+ErrHandler:
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description
+    Resume ExitPoint
+End Function
+Public Sub AttachmentAdd(ByVal strFileName As String, _
+                         ByVal strDisplayName As String)
+    On Error GoTo ErrHandler
+    mstrErrProc = "AttachmentAdd"
+    If strFileName = "" Then
+        Err.Raise 10005, , "Attachment filename cannot be empty"
+    ElseIf strDisplayName = "" Then
+        Err.Raise 10006, , "Attachment Display Name cannot be empty"
+    Else
+    '-- Add the attachment to the collection (with display name separated by a hash character)
+        mcolAttachments.Add strFileName & IIf(strDisplayName <> "", "#" & strDisplayName, "")
+    End If
+ExitPoint:
+    On Error Resume Next
+    Exit Sub
+ErrHandler:
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description
+    Resume ExitPoint
+End Sub
+Public Sub AttachmentsClear()
+    Set mcolAttachments = Nothing
+    Set mcolAttachments = New Collection
+End Sub
+'-- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+'-- MICROSOFT OUTLOOK
+'-- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+Private Function Outlook_GenerateEmail() As Boolean
+Dim mtmItem As Object
+    On Error GoTo ErrHandler
+    mstrErrProc = "Outlook_GenerateEmail"
+'-- If the client is not already open
+    If mbolClientOpen = False Then
+    '-- Open the client
+        If Outlook_OpenClient = False Then
+        '-- Error occurred, allowing escape for calling code to handle
+            GoTo ExitPoint
+        End If
+    End If
+'-- Now create the email
+    Set mtmItem = molkApp.CreateItem(olMailItem)
+    With mtmItem
+        .To = mstrTo
+        .CC = mstrCC
+        .BCC = mstrBCC
+        .subject = mstrSubject
+        If mbolHTML = True Then
+        '-- As this is HTML, vbCrLf will not work and line break tags need to be inserted/replaced instead
+            .HTMLBody = mstrBody & IIf(mstrSignature <> "", "<br>" & "<br>" & Replace(mstrSignature, vbCrLf, "<br>"), "")
+        Else
+            .body = mstrBody & IIf(mstrSignature <> "", vbCrLf & vbCrLf & mstrSignature, "")
+        End If
+    '-- If the email needs to be from another mailbox/account
+        If mstrFrom <> "" Then
+            .SentOnBehalfOfName = mstrFrom
+        End If
+    '-- If the names need to be resolved prior to display/send (loop check needed)
+    '-- DISABLED FOR 1.0 RELEASE (as this requires looping per recipient name for To, CC and BCC)
+'        If mbolResolve = True Then
+'            .Recipients.ResolveAll
+'        End If
+    '-- If attachments are required
+        If mcolAttachments.Count > 0 Then
+            If Outlook_AddAttachmentsToMailItem(mtmItem) = False Then
+                GoTo ExitPoint
+            End If
+        End If
+    '-- Display the Email
+        .Display
+    End With
+    Outlook_GenerateEmail = True
+ExitPoint:
+    On Error Resume Next
+    Set mtmItem = Nothing
+    Exit Function
+ErrHandler:
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description
+    Resume ExitPoint
+End Function
+Private Function Outlook_OpenClient() As Boolean
+    On Error GoTo ErrHandler
+    mstrErrProc = "Outlook_OpenClient"
+'-- Attempt to connect into an open instance of Outlook (this will error if an instance is not available)
+    Set molkApp = GetObject(, "Outlook.Application")
+InitialiseOutlook:
+'-- Ensure there are no issues by default loading the Inbox
+    If molkApp.Explorers.Count = 0 Then
+        molkApp.Session.GetDefaultFolder(olFolderInbox).Display
+    End If
+    Outlook_OpenClient = True
+ExitPoint:
+    On Error Resume Next
+    Exit Function
+ErrHandler:
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description
+    Resume ExitPoint
+End Function
+Private Function Outlook_AddAttachmentsToMailItem(ByRef mtmItem As Outlook.MailItem) As Boolean
+Dim intCount As Integer
+Dim strFileName As String
+Dim strDisplayName As String
+Dim intPos As Integer
+    On Error GoTo ErrHandler
+    mstrErrProc = "Outlook_AddAttachmentsToMailItem"
+'-- Loop through attachments required in the collection
+    For intCount = 1 To mcolAttachments.Count
+    '-- If a display name has been provided, strip out this and the file name
+        If InStr(1, mcolAttachments.Item(intCount), "#") > 0 Then
+            intPos = InStr(1, mcolAttachments.Item(intCount), "#")
+            strFileName = Left(mcolAttachments.Item(intCount), intPos - 1)
+            strDisplayName = Right(mcolAttachments.Item(intCount), Len(mcolAttachments.Item(intCount)) - intPos)
+        Else
+        '-- Only file name exists, no need for a display name
+            strFileName = mcolAttachments.Item(intCount)
+            strDisplayName = ""
+        End If
+    '-- Add the attachment (if the file is not found an error will generate)
+        If strDisplayName <> "" Then
+            mtmItem.Attachments.Add strFileName, , , strDisplayName
+        Else
+            mtmItem.Attachments.Add strFileName
+        End If
+    Next intCount
+    Outlook_AddAttachmentsToMailItem = True
+ExitPoint:
+    On Error Resume Next
+    Exit Function
+ErrHandler:
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description & " - " & strFileName
+    Resume ExitPoint
+End Function
+'-- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+'-- LOTUS NOTES
+'-- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+Private Function LotusNotes_GenerateEmail(ByVal strSeparator As String) As Boolean
+Dim objLNSession As Object
+Dim objLNMailDB As Object
+Dim objLNMailDoc As Object
+Dim objLNStream As Object
+Dim objLNBody As Object
+Dim objLNWorkSpace As Object
+Dim objLNUIDoc As Object
+Dim objLNEmbed As Object
+Dim objLNAttach As Object
+Dim bolConvertMIME As Boolean
+Dim intCount As Integer
+Dim intPos As Integer
+Dim strDisplayName As String
+Dim strFileName As String
+    On Error GoTo ErrHandler
+'-- Create instances of LN Session and Workspace
+    Set objLNSession = CreateObject("Notes.NotesSession")
+    Set objLNWorkSpace = CreateObject("Notes.NotesUiWorkspace")
+'-- Check if we need to send on behlf of another mailbox
+    If mstrLNMailboxEMailAddress <> "" Then
+        Set objLNMailDB = objLNSession.GetDatabase(mstrMailGroupFileName, mstrMailGroupFileLocation)
+    Else
+        Set objLNMailDB = objLNSession.GetDatabase("", "")
+    End If
+'-- Open the database (if needs)
+    If objLNMailDB.IsOpen = False Then
+        Call objLNMailDB.OPENMAIL
+    End If
+'-- Create a mail document
+    Set objLNMailDoc = objLNMailDB.CreateDocument()
+'-- Replace various properties
+    Call objLNMailDoc.ReplaceItemValue("Form", "Memo")
+    Call objLNMailDoc.ReplaceItemValue("Subject", mstrSubject)
+    Call objLNMailDoc.ReplaceItemValue("SendTo", Split(mstrTo, strSeparator))
+    Call objLNMailDoc.ReplaceItemValue("CopyTo", Split(mstrCC, strSeparator))
+    Call objLNMailDoc.ReplaceItemValue("BlindCopyTo", Split(mstrBCC, strSeparator))
+'-- Change the "FROM" if a mailbox is being used
+    If mstrLNMailboxEMailAddress <> "" Then
+        objLNMailDoc.ReplaceItemValue "Principal", mstrLNMailboxEMailAddress
+        objLNMailDoc.ReplaceItemValue "From", mstrLNMailboxEMailAddress
+        objLNMailDoc.ReplaceItemValue "Sender", mstrLNMailboxEMailAddress
+        objLNMailDoc.ReplaceItemValue "ReplyTo", mstrLNMailboxEMailAddress
+        objLNMailDoc.ReplaceItemValue "SMTPOriginator", mstrLNMailboxEMailAddress
+    End If
+'-- Add the body as a mime html part and copy it to the clipboard
+    bolConvertMIME = objLNSession.convertMime
+    objLNSession.convertMime = False
+'-- Create a stream for the body
+    Set objLNStream = objLNSession.CreateStream()
+'-- Body check for signature
+    If mbolHTML = True Then
+    '-- As this is HTML, vbCrLf will not work and line break tags need to be inserted/replaced instead
+        mstrBody = mstrBody & IIf(mstrSignature <> "", "<br>" & "<br>" & Replace(mstrSignature, vbCrLf, "<br>"), "")
+    Else
+        mstrBody = mstrBody & IIf(mstrSignature <> "", vbCrLf & vbCrLf & mstrSignature, "")
+    End If
+'-- Write the body text to the stream
+    objLNStream.WriteText (mstrBody)
+'-- Create a container to stream the body text into
+    Set objLNBody = objLNMailDoc.CreateMIMEEntity("Body")
+'-- Stream the body text into the container
+    Call objLNBody.SetContentFromText(objLNStream, "text/html; charset=""iso-8859-1""", ENC_IDENTITY_8BIT)
+'-- Close the stream
+    Call objLNStream.Close
+'-- Reset back to how things were
+    objLNSession.convertMime = bolConvertMIME
+    If mcolAttachments.Count > 0 Then
+    '-- Loop through attachments required in the collection
+        For intCount = 1 To mcolAttachments.Count
+        '-- Display name has been provided, strip out this (to use for a unique name) and the file name
+            If InStr(1, mcolAttachments.Item(intCount), "#") > 0 Then
+                intPos = InStr(1, mcolAttachments.Item(intCount), "#")
+                strFileName = Left(mcolAttachments.Item(intCount), intPos - 1)
+                strDisplayName = Right(mcolAttachments.Item(intCount), Len(mcolAttachments.Item(intCount)) - intPos)
+            Else
+                strFileName = mcolAttachments.Item(intCount)
+            '-- Display name not provided, we require one so create a unique one instead
+                strDisplayName = "MCLT_ATTACHMENT_" & CStr(intCount)
+            End If
+        '-- Add the attachment to the Mail Document
+            Set objLNAttach = objLNMailDoc.CreateRichTextItem(strDisplayName)
+            Set objLNEmbed = objLNAttach.EmbedObject(EMBED_ATTACHMENT, strDisplayName, strFileName, "")
+        Next intCount
+    End If
+'-- Open document in read write format
+    Call objLNMailDoc.Save(True, False)
+'-- Display the mail
+    Set objLNUIDoc = objLNWorkSpace.EDITDOCUMENT(True, objLNMailDoc)
+    LotusNotes_GenerateEmail = True
+ExitPoint:
+    On Error Resume Next
+'-- Destroy objects
+    Set objLNWorkSpace = Nothing
+    Set objLNMailDB = Nothing
+    Set objLNMailDoc = Nothing
+    Set objLNEmbed = Nothing
+    Set objLNAttach = Nothing
+    Set objLNStream = Nothing
+    Set objLNBody = Nothing
+    Set objLNUIDoc = Nothing
+    Set objLNSession = Nothing
+    Exit Function
+ErrHandler:
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description
+    Resume ExitPoint
+End Function
+Public Function NonMigratedSharedMailboxSwitch(ByVal bolUseLotusNotes As Boolean) As Boolean
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- This procedure is called due to mailbox functionality that has not been migrated to Exchange/Outlook
+'-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+'-- Safety checks to ensure the Mail Client is available
+    If mintMailClient = mcintNoMailClientFound Then
+        Err.Raise 10020, "NonMigratedSharedMailboxSwitch", "Cannot switch Mail Client as it is currently not found/available"
+    End If
+'-- Attempt to switch the client
+    If bolUseLotusNotes = True Then
+    '-- Check the LN information required exists
+        If mstrMailGroupFileLocation = "" Then
+            Err.Raise 10013, , "Lotus Notes Group Mailbox location missing"
+        End If
+        If mstrMailGroupFileName = "" Then
+            Err.Raise 10012, , "Lotus Notes Group Mailbox name missing"
+        End If
+        If mstrLNMailboxEMailAddress = "" Then
+            Err.Raise 10014, , "Lotus Notes Group Mailbox address missing"
+        End If
+    '-- All Ok, switch the mail client to LN
+        mintMailClient = mcintIBMLotusNotes
+    Else
+    '-- Switch back to the required client
+        Select Case mstrMailClient
+            Case "Lotus Notes"
+                mintMailClient = mcintIBMLotusNotes
+            Case "Microsoft Outlook"
+                mintMailClient = mcintMicrosoftOutlook
+        End Select
+    End If
+    NonMigratedSharedMailboxSwitch = True
+ExitPoint:
+    Exit Function
+ErrHandler:
+    mlngErrNo = Err.Number
+    mstrErrDesc = Err.Description
+    mstrErrProc = "NonMigratedSharedMailboxSwitch"
+End Function
+'-- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+'-- PROPERTIES
+'-- * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+'-- Last Error Number
+Public Property Get ErrNo() As Long
+    ErrNo = mlngErrNo
+End Property
+'-- Last Error Description
+Public Property Get ErrDesc() As String
+    ErrDesc = mstrErrDesc
+End Property
+'-- Last Error Description
+Public Property Get ErrProc() As String
+    ErrProc = mstrErrProc
+End Property
+'-- Mail Client in Use
+Public Property Get CurrentMailClient() As String
+    Select Case mintMailClient
+        Case mcintMicrosoftOutlook
+            CurrentMailClient = "Microsoft Outlook"
+        Case mcintIBMLotusNotes
+            CurrentMailClient = "Lotus Notes"
+        Case Else
+            CurrentMailClient = "MAIL_CLIENT_NOT_FOUND"
+    End Select
+End Property
+'-- Mail Client State
+Public Property Get CurrentMailClientState() As String
+    Select Case mintMailClientState
+        Case mcintMailClientAvailable
+            CurrentMailClientState = "Available"
+        Case mcintMailClientLocked
+            CurrentMailClientState = "Client is locked"
+        Case Else
+            CurrentMailClientState = "Client is not open"
+    End Select
+End Property
+'-- EMail To (Recipient) List
+Public Property Let EMail_To(ByVal strTo As String)
+    mstrTo = strTo
+End Property
+Public Property Get EMail_To() As String
+    EMail_To = mstrTo
+End Property
+'-- EMail CC list
+Public Property Let EMail_CC(ByVal strCC As String)
+    mstrCC = strCC
+End Property
+Public Property Get EMail_CC() As String
+    EMail_CC = mstrCC
+End Property
+'-- EMail BCC List
+Public Property Let EMail_BCC(ByVal strBCC As String)
+    mstrBCC = strBCC
+End Property
+Public Property Get EMail_BCC() As String
+    EMail_BCC = mstrBCC
+End Property
+'-- EMail Subject
+Public Property Let EMail_Subject(ByVal strSubject As String)
+    mstrSubject = strSubject
+End Property
+Public Property Get EMail_Subject() As String
+    EMail_Subject = mstrSubject
+End Property
+'-- Email Body
+Public Property Let EMail_Body(ByVal strBody As String)
+    mstrBody = strBody
+End Property
+Public Property Get EMail_Body() As String
+    EMail_Body = mstrBody
+End Property
+'-- EMail From (use of another mailbox/account)
+Public Property Let EMail_OutlookFrom(ByVal strFrom As String)
+    mstrFrom = strFrom
+End Property
+Public Property Get EMail_OutlookFrom() As String
+    EMail_OutlookFrom = mstrFrom
+End Property
+'-- EMail HTML or plain text
+Public Property Let EMail_HTML(ByVal bolHTML As Boolean)
+    mbolHTML = bolHTML
+End Property
+Public Property Get EMail_HTML() As Boolean
+    EMail_HTML = mbolHTML
+End Property
+'-- EMail Signature
+Public Property Let EMail_Signature(ByVal strSignature As String)
+    mstrSignature = strSignature
+End Property
+Public Property Get EMail_Signature() As String
+    EMail_Signature = mstrSignature
+End Property
+'-- EMail Clear Properties after EMail creation
+Public Property Let ClearEMailPropertiesAfterCreation(ByVal bolClear As Boolean)
+    mbolClearPropertiesAfterCreation = bolClear
+End Property
+Public Property Get ClearEMailPropertiesAfterCreation() As Boolean
+    ClearEMailPropertiesAfterCreation = mbolClearPropertiesAfterCreation
+End Property
+'-- EMail LN File Name for mail file/group
+Public Property Let LN_MailGroupFileName(ByVal strMailGroupFileName As String)
+    mstrMailGroupFileName = strMailGroupFileName
+End Property
+Public Property Get LN_MailGroupFileName() As String
+    LN_MailGroupFileName = mstrMailGroupFileName
+End Property
+'-- EMail LN File Location for mail file/group
+Public Property Let LN_MailGroupFileLocation(ByVal strMailGroupFileLocation As String)
+    mstrMailGroupFileLocation = strMailGroupFileLocation
+End Property
+Public Property Get LN_MailGroupFileLocation() As String
+    LN_MailGroupFileLocation = mstrMailGroupFileLocation
+End Property
+'-- EMail LN File Location for mail file/group
+Public Property Let LN_MailboxEMailAddress(ByVal strEmailAddress As String)
+    mstrLNMailboxEMailAddress = strEmailAddress
+End Property
+'-- If the mail client has been overridden
+Public Property Get MailClientOverridden() As Boolean
+    MailClientOverridden = mbolClientOverridden
+End Property
+

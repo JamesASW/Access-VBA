@@ -1,0 +1,2447 @@
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "clsListView"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Option Compare Database
+Option Explicit
+
+' Class:        clsListView
+
+' Description:  Routines to manipulate data to or from ListViews
+
+' Author:       Noel Carey (mostly filched from James Cronshaw's {JRC} module of same name!)
+
+' Reference:    Windows Common Controls (mscomctl.ocx)
+
+' Methods:      lvwApplyConditions      Apply conditional formatting to selected/unselected items
+'               lvwApplyConditionsItem  Apply conditional formatting to specific list view item
+'               lvwClear                Clear listview rows
+'               lvwClearLinked          Clear linked listviews and forms
+'               lvwClearLinkedLists     Clear linked listviews
+'               lvwClearLinkedForms     Clear linked forms
+'               lvwFind                 Find a specific value - after a specified row if required
+'               lvwFindHighlight        Find and highlight all rows/cells matching a specific value
+'               lvwFindKey              Find a specific key
+'               lvwGetCellReference     Return reference of right-clicked cell (0 = main, 1..n = sub items)
+'               lvwGetCellValue         Return value of right-clicked cell
+'               lvwGetColumnName        Return column name from number
+'               lvwGetColumnNo          Return column number from name
+'               lvwGetColumnTotal       Return total value of numeric items for all/selected rows in a column
+'               lvwGetColumnValue       Return value for column for selected row
+'               lvwGetColumnValues      Return '#' separated list of specified column values for all/selected rows
+'               lvwGetKey               Return selected key
+'               lvwGetKeys              Return comma separated list of selected/found keys
+'               lvwHideColumn           Hide column identified by name
+'               lvwHideColumnNo         Hide column identified by number
+'               lvwIsHiddenColumn       Return TRUE if column is hidden
+'               lvwPopulateFromQuery    Populate from query (with parameters)
+'               lvwPopulateFromRS       Populate from DAO/ADO result set
+'               lvwPopulateFromSQL      Populate from sql/query string
+'               lvwRefreshLinked        Refresh all linked listviews and forms
+'               lvwRefreshLinkedForm    Refresh specific linked form
+'               lvwRefreshLinkedForms   Refresh all linked forms
+'               lvwRefreshLinkedList    Refresh specific linked listview
+'               lvwRefreshLinkedLists   Refresh all linked listviews
+'               lvwRefreshQuery         Refresh parameter driven query
+'               lvwRefreshRS            Redraw updated DAO/ADO result set
+'               lvwRefreshSQL           Redraw updated sql/query set
+'               lvwReset                Undo all selections/highlights
+'               lvwResize               Resize columns to maximum header/data width
+'               lvwRowCount             Number of rows in listview
+'               lvwSaveSelected         Save selected/found rows to XLS/CSV file
+'               lvwSelectAll            Select all/no rows
+'               lvwSelectedCount        Number of selected rows
+'               lvwSelectKey            Select a specific key
+'               lvwSelectKeys           Select a list of ',' separated keys
+'               lvwSetCellColor         Set specific cell color
+'               lvwSetColumnColor       Set specific column color
+'               lvwSetCondition         Set conditional format
+'               lvwSetLinkedForm        Specify a linked form class
+'               lvwSetLinkedFormColumn  Specify a linkage column for a linked form
+'               lvwSetLinkedList        Specify a linked listview class
+'               lvwSetLinkedListColumn  Specify a linkage column for a linked listview
+'               lvwSetParameter         Set specific parameter for lvwPopulateFromQuery
+'               lvwSetQuery             Set query details for parameter (deferred) populate
+'               lvwSetRowColor          Set specific row color
+'               lvwShowColumn           Show column identified by name
+'               lvwShowColumnNo         Show column identified by number
+'               lvwSort                 Sort by column
+
+' Properties:   ArrowUp                 Character preceeding a column indicate ascending sort
+'               ArrowDown               Character preceeding a column indicate descending sort
+'               BackColor               Background color for the listview
+'               Clicked                 Has list been clicked on
+'               ConditionalFormat       Turn conditional formatting on/off
+'               FormatDate              Format for date columns
+'               FormatDouble            Format for double columns
+'               FormatInt               Format for integer columns
+'               ImageColumn             Specify column containing image index/mnemonic
+'               ImageIndex              Specify specific image index for all rows on listview
+'               ImageKey                Specify specific image mnemonic for all rows on listview
+'               ImageList               Specify image list object
+'               KeepFind                Keep (stack) finds on/off
+'               KeyName                 Name of the key column
+'               KeySeparator            Character separating compound keys
+'               KeyType                 Type of the key column (string/number)
+'               ListView                Specify listview control
+'               MultiSelect             Multiselect on/off
+'               ShowShadow              Show/hide shadow columns
+
+' local functions
+Private Declare Function SendMessage Lib "user32" Alias "SendMessageA" (ByVal hWnd As Long, ByVal wMsg As Long, ByVal wParam As Long, lParam As Any) As Long
+Private Declare Function GetDC Lib "user32" (ByVal hWnd As Long) As Long
+Private Declare Function ReleaseDC Lib "user32" (ByVal hWnd As Long, ByVal hdc As Long) As Long
+Private Declare Function GetDeviceCaps Lib "gdi32" (ByVal hdc As Long, ByVal nIndex As Long) As Long
+Private Declare Function LockWindowUpdate Lib "user32" (ByVal hwndLock As Long) As Long
+
+' window call constants
+Private Const LVM_FIRST As Long = &H1000
+Private Const LVM_SETCOLUMNWIDTH = (LVM_FIRST + 30)
+Private Const LVSCW_AUTOSIZE = -1
+Private Const LVSCW_AUTOSIZE_USEHEADER = -2
+Private Const LVM_HITTEST As Long = (LVM_FIRST + 18)
+Private Const LVM_SUBITEMHITTEST As Long = (LVM_FIRST + 57)
+Private Const LVHT_ONITEMICON As Long = &H2
+Private Const LVHT_ONITEMLABEL As Long = &H4
+Private Const LVHT_ONITEMSTATEICON As Long = &H8
+Private Const LVHT_ONITEM As Long = (LVHT_ONITEMICON Or LVHT_ONITEMLABEL Or LVHT_ONITEMSTATEICON)
+Private Const HWND_DESKTOP As Long = 0
+Private Const LOGPIXELSX As Long = 88
+Private Const LOGPIXELSY As Long = 90
+ 
+' types
+Private Type POINTAPI
+    x As Long
+    y As Long
+End Type
+
+Private Type LVHITTESTINFO
+    pt As POINTAPI
+    flags As Long
+    iItem As Long
+    iSubItem  As Long
+End Type
+
+' list view being handled
+Private mctlThis As Control
+Private mlvwThis As ListView
+
+' query for export
+Private mstrQuery As String
+Private mstrKeyName As String
+Private mstrKeyType As String
+
+' formats
+Private mstrFormatDouble As String
+Private mstrFormatInt As String
+Private mstrFormatLong As String
+Private mstrFormatDate As String
+
+' shadow formats
+Private mstrShadowDouble As String
+Private mstrShadowInt As String
+Private mstrShadowLong As String
+Private mstrShadowDate As String
+
+' shadow column indicator
+Private mstrShadow As String
+
+' show shadows?
+Private mbolShowShadow As Boolean
+
+' keep track of hidden columns
+Private mstrHidden As String
+
+' arrows displaying sort order
+Private mstrArrowUp As String
+Private mstrArrowDown As String
+
+' background
+Private mlngBackColor As Long
+
+' key separator
+Private mstrKeySeparator As String
+
+' expand by %
+Private Const cdblMargin = 0.1
+
+' special find column and counter
+Private mintFind As Integer
+Private mlngFind As Long
+
+' allow finds to stack?
+Private mbolKeepFind As Boolean
+
+' find column and default value
+Private mstrFind As String
+Private Const cstrFindDefault = "999999"
+
+' on the fly query for selected saves
+Private Const mstrSave = "clsListView"
+
+' keep setup options
+Private mintKey As Integer
+Private mbolShowKey As Boolean
+Private mbolAutosize As Boolean
+
+' image control
+Private mintImageIndex As Integer
+Private mstrImageKey As String
+Private mintImageColumn As Integer
+
+' keep track of parameters for query set
+Private mvarParm() As Variant
+Private mbolParm As Boolean
+
+' keep track of linked listviews
+Private mclsLinkList() As clsListView
+Private mstrLinkList() As String
+Private mbolLinkList As Boolean
+
+' keep track of linked forms
+Private mclsLinkForm() As clsForm
+Private mstrLinkForm() As String
+Private mbolLinkForm As Boolean
+
+' keep track of conditional formatting
+Private mintConditionCol() As Integer
+Private mstrConditionCol() As String
+Private mstrCondition() As String
+Private mvarConditionVal() As Variant
+Private mbolConditionBold() As Boolean
+Private mlngConditionColor() As Long
+Private mbolConditionRow() As Boolean
+Private mbolCondition As Boolean
+
+' keep track of column types
+Private mlngColType() As Long
+
+' columns set up?
+Private mbolSetup As Boolean
+
+' list clicked on?
+Private mbolClicked As Boolean
+
+' sort column
+Private mstrSort As String
+
+' code from MS Website to allow Twip to Pixel conversion
+Private Function TwipsPerPixelX() As Single
+
+    Dim lngDC As Long
+    
+    lngDC = GetDC(HWND_DESKTOP)
+    TwipsPerPixelX = 1440& / GetDeviceCaps(lngDC, LOGPIXELSX)
+    ReleaseDC HWND_DESKTOP, lngDC
+    
+End Function
+
+' returns height of pixel in twips
+Private Function TwipsPerPixelY() As Single
+
+    Dim lngDC As Long
+    
+    lngDC = GetDC(HWND_DESKTOP)
+    TwipsPerPixelY = 1440& / GetDeviceCaps(lngDC, LOGPIXELSY)
+    ReleaseDC HWND_DESKTOP, lngDC
+    
+End Function
+
+' populates listview with data based on SQL statement or query
+Public Sub lvwPopulateFromSQL(ByVal strSQL As String, _
+                                Optional intKey As Integer, _
+                                Optional bolShowKey As Boolean, _
+                                Optional bolAutosize As Boolean = True, _
+                                Optional bolRefresh As Boolean)
+
+    Dim rstData As DAO.Recordset
+    
+    ' save for export
+    mstrQuery = strSQL
+
+    ' load data
+    Set rstData = CurrentDb.OpenRecordset(strSQL)
+    
+    lvwPopulateFromRS rstData, intKey, bolShowKey, bolAutosize, bolRefresh
+    
+    rstData.Close
+    Set rstData = Nothing
+    
+End Sub
+
+Public Sub lvwSetQuery(strQuery As String, Optional intKey As Integer, Optional bolShowKey As Boolean, Optional bolAutosize As Boolean = True)
+
+    mstrQuery = strQuery
+    mintKey = intKey
+    mbolShowKey = bolShowKey
+    mbolAutosize = bolAutosize
+    
+End Sub
+
+Public Function lvwSetLinkedList(lvwLink As clsListView, Optional bolKey As Boolean) As Integer
+
+    Dim intPtr As Integer
+
+    ' is linked array dimensioned?
+    If mbolLinkList Then
+        intPtr = UBound(mclsLinkList) + 1
+    Else
+        mbolLinkList = True
+    End If
+    
+    ReDim Preserve mclsLinkList(intPtr)
+    ReDim Preserve mstrLinkList(intPtr)
+    
+    ' set
+    Set mclsLinkList(intPtr) = lvwLink
+    
+    ' set key as parameter?
+    If bolKey Then
+        Call lvwSetLinkedListColumn(intPtr)
+    End If
+    
+    ' return pointer
+    lvwSetLinkedList = intPtr
+    
+End Function
+
+Public Function lvwSetLinkedForm(clsLink As clsForm, Optional bolKey As Boolean) As Integer
+
+    Dim intPtr As Integer
+
+    ' is linked array dimensioned?
+    If mbolLinkForm Then
+        intPtr = UBound(mclsLinkForm) + 1
+    Else
+        mbolLinkForm = True
+    End If
+    
+    ReDim Preserve mclsLinkForm(intPtr)
+    ReDim Preserve mstrLinkForm(intPtr)
+    
+    ' set
+    Set mclsLinkForm(intPtr) = clsLink
+    
+    ' set key as parameter?
+    If bolKey Then
+        Call lvwSetLinkedFormColumn(intPtr)
+    End If
+    
+    ' return pointer
+    lvwSetLinkedForm = intPtr
+    
+End Function
+
+Public Function lvwSetCondition(strColumn As String, strCondition As String, varValue As Variant, Optional lngColor As Long, Optional bolBold As Boolean, Optional bolRow As Boolean) As Integer
+
+    Dim intPtr As Integer
+    Dim lvwItem As ListItem
+
+    ' is condition array dimensioned?
+    If mbolCondition Then
+        intPtr = UBound(mintConditionCol) + 1
+    Else
+        mbolCondition = True
+    End If
+    
+    ReDim Preserve mstrConditionCol(intPtr)
+    ReDim Preserve mintConditionCol(intPtr)
+    ReDim Preserve mstrCondition(intPtr)
+    ReDim Preserve mvarConditionVal(intPtr)
+    ReDim Preserve mbolConditionBold(intPtr)
+    ReDim Preserve mlngConditionColor(intPtr)
+    ReDim Preserve mbolConditionRow(intPtr)
+    
+    ' set - col = 0 to indicate needs looking up
+    mintConditionCol(intPtr) = 0
+    mstrConditionCol(intPtr) = strColumn
+    mstrCondition(intPtr) = LCase(strCondition)
+    mvarConditionVal(intPtr) = varValue
+    mlngConditionColor(intPtr) = lngColor
+    mbolConditionBold(intPtr) = bolBold
+    mbolConditionRow(intPtr) = bolRow
+    
+    ' implement
+    For Each lvwItem In mlvwThis.ListItems
+        Call fApplyCondition(intPtr, lvwItem)
+    Next
+    mlvwThis.Refresh
+    
+    ' return pointer
+    lvwSetCondition = intPtr
+    
+    Set lvwItem = Nothing
+    
+End Function
+
+' specify which columns are linked - no column indicates key
+Public Sub lvwSetLinkedFormColumn(intForm As Integer, Optional strColumn As String)
+
+    Dim intPtr As Integer
+
+    If mbolLinkForm Then
+        If intForm >= 0 And intForm <= UBound(mstrLinkForm) Then
+    
+            ' key one of linked columns?
+            If strColumn = "" Then
+                strColumn = ";<key>;"
+            Else
+                strColumn = ";" & LCase(strColumn) & ";"
+            End If
+            
+            ' strip brackets?
+            If Left(strColumn, 1) = "[" Then
+                strColumn = Mid(strColumn, 2)
+            End If
+            If Right(strColumn, 1) = "]" Then
+                strColumn = Left(strColumn, Len(strColumn) - 1)
+            End If
+        
+            ' only set once
+            intPtr = InStr(mstrLinkForm(intForm), strColumn)
+            If intPtr = 0 Then
+                mstrLinkForm(intForm) = mstrLinkForm(intForm) & strColumn
+            End If
+        End If
+    End If
+   
+End Sub
+
+' specify which columns are linked - no column indicates key
+Public Sub lvwSetLinkedListColumn(intList As Integer, Optional strColumn As String)
+
+    Dim intPtr As Integer
+
+    If mbolLinkList Then
+        If intList >= 0 And intList <= UBound(mstrLinkList) Then
+    
+            ' key one of linked columns?
+            If strColumn = "" Then
+                strColumn = ";<key>;"
+            Else
+                strColumn = ";" & LCase(strColumn) & ";"
+            End If
+            
+            ' strip brackets?
+            If Left(strColumn, 1) = "[" Then
+                strColumn = Mid(strColumn, 2)
+            End If
+            If Right(strColumn, 1) = "]" Then
+                strColumn = Left(strColumn, Len(strColumn) - 1)
+            End If
+        
+            ' only set once
+            intPtr = InStr(mstrLinkList(intList), strColumn)
+            If intPtr = 0 Then
+                mstrLinkList(intList) = mstrLinkList(intList) & strColumn
+            End If
+        End If
+    End If
+   
+End Sub
+
+' refresh linked lists and forms
+Public Sub lvwRefreshLinked()
+    
+    lvwRefreshLinkedForms
+    lvwRefreshLinkedLists
+    
+End Sub
+
+' refresh linked listviews
+Public Sub lvwRefreshLinkedLists()
+
+    Dim intLink As Integer
+    
+    ' assume clicked
+    mbolClicked = True
+    
+    ' anything linked?
+    If mbolLinkList Then
+        For intLink = 0 To UBound(mstrLinkList)
+            Call lvwRefreshLinkedList(intLink)
+        Next
+    End If
+    
+End Sub
+
+Public Sub lvwRefreshLinkedList(intLink As Integer)
+
+    Dim clsLink As clsListView
+    Dim strParms As String
+    Dim strParm As String
+    Dim strValue As String
+    Dim strType As String
+    Dim intPtr As Integer
+    Dim intCol As Integer
+    Dim intParm As Integer
+    Dim strKeys() As String
+    Dim strKey As String
+    
+    ' anything linked?
+    If Not mbolLinkList Then
+        Exit Sub
+    End If
+    
+    If intLink > UBound(mstrLinkList) Then
+        Debug.Print "Linked List: " & mstrQuery & " out of bounds " & intLink
+        Exit Sub
+    End If
+    
+    Set clsLink = mclsLinkList(intLink)
+        
+    ' set each parameter
+    strParms = mstrLinkList(intLink)
+    intParm = 0
+    Do While Len(strParms) > 0
+            
+        ' look for end of one token and start of another
+        intPtr = InStr(strParms, ";;")
+        If intPtr = 0 Then
+            strParm = strParms
+            strParms = ""
+        Else
+            strParm = Left(strParms, intPtr - 1)
+            strParms = Mid(strParms, intPtr + 1)
+        End If
+                
+        ' strip token marker
+        strParm = Replace(strParm, ";", "")
+                
+        ' get column value
+        If strParm = "<key>" Then
+            strValue = lvwGetKey
+            intCol = 0
+        ElseIf strParm <> "" Then
+            strValue = lvwGetColumnValue(strParm)
+            intCol = lvwGetColumnNo(strParm)
+        End If
+                
+        ' key
+        If intCol = 0 Then
+                
+            ' break up
+            strKeys = Split(strValue, mstrKeySeparator)
+            For intPtr = 0 To UBound(strKeys)
+                strKey = strKeys(intPtr)
+                Call clsLink.lvwSetParameter(intParm, strKey)
+                        
+                ' each component is parameter
+                intParm = intParm + 1
+            Next
+        Else
+            Call clsLink.lvwSetParameter(intParm, strValue)
+            intParm = intParm + 1
+        End If
+    Loop
+            
+    ' refresh
+    Call clsLink.lvwRefreshQuery
+
+End Sub
+
+' refresh linked forms
+Public Sub lvwRefreshLinkedForms()
+
+    Dim intLink As Integer
+    
+    ' assume clicked
+    mbolClicked = True
+    
+    ' anything linked?
+    If mbolLinkForm Then
+        For intLink = 0 To UBound(mstrLinkForm)
+            Call lvwRefreshLinkedForm(intLink)
+        Next
+    End If
+    
+End Sub
+    
+Public Sub lvwRefreshLinkedForm(intLink As Integer)
+
+    Dim strParms As String
+    Dim strParm As String
+    Dim strValue As String
+    Dim strType As String
+    Dim intPtr As Integer
+    Dim intCol As Integer
+    Dim intParm As Integer
+    Dim clsLink As clsForm
+    Dim strKeys() As String
+    Dim strKey As String
+
+    ' anything linked?
+    If Not mbolLinkForm Then
+        Exit Sub
+    End If
+
+    If intLink > UBound(mstrLinkForm) Then
+        Debug.Print "Linked Form: " & mstrQuery & " out of bounds " & intLink
+        Exit Sub
+    End If
+
+    Set clsLink = mclsLinkForm(intLink)
+
+    ' set each parameter
+    strParms = mstrLinkForm(intLink)
+    intParm = 0
+    Do While Len(strParms) > 0
+
+        ' look for end of one token and start of another
+        intPtr = InStr(strParms, ";;")
+        If intPtr = 0 Then
+            strParm = strParms
+            strParms = ""
+        Else
+            strParm = Left(strParms, intPtr - 1)
+            strParms = Mid(strParms, intPtr + 1)
+        End If
+
+        ' strip token marker
+        strParm = Replace(strParm, ";", "")
+
+        ' get column value
+        If strParm = "<key>" Then
+            strValue = lvwGetKey
+            intCol = 0
+        ElseIf strParm <> "" Then
+            strValue = lvwGetColumnValue(strParm)
+            intCol = lvwGetColumnNo(strParm)
+        End If
+
+        ' key
+        If intCol = 0 Then
+
+            ' break up
+            strKeys = Split(strValue, mstrKeySeparator)
+            For intPtr = 0 To UBound(strKeys)
+                strKey = strKeys(intPtr)
+                Call clsLink.frmSetParameter(intParm, strKey)
+                        
+                ' each component is parameter
+                intParm = intParm + 1
+            Next
+        Else
+            Call clsLink.frmSetParameter(intParm, strValue)
+            intParm = intParm + 1
+        End If
+    Loop
+            
+    ' refresh
+    Call clsLink.frmPopulate
+
+End Sub
+
+Public Sub lvwSetParameter(intParm As Integer, varValue As Variant)
+
+    ' is parm array dimensioned?
+    If Not mbolParm Then
+        ReDim Preserve mvarParm(0)
+        mbolParm = True
+    End If
+    
+    ' expand?
+    If intParm > UBound(mvarParm) Then
+        ReDim Preserve mvarParm(intParm)
+    End If
+    
+    ' set
+    mvarParm(intParm) = varValue
+    
+End Sub
+
+Public Sub lvwPopulateFromQuery(ByVal strQuery As String, _
+                                Optional intKey As Integer, _
+                                Optional bolShowKey As Boolean, _
+                                Optional bolAutosize As Boolean = True, _
+                                Optional bolRefresh As Boolean)
+
+    Dim qdfData As QueryDef
+    Dim rstData As DAO.Recordset
+    Dim intPtr As Integer
+
+    ' save for export
+    mstrQuery = strQuery
+
+    ' useful for debug
+    If strQuery = "qryAPP0220" Then
+        strQuery = "qryAPP0220"
+    End If
+
+    Set qdfData = CurrentDb.QueryDefs(strQuery)
+    
+    ' convert each parameter to expected query type
+    Do While intPtr <= UBound(mvarParm) And intPtr < qdfData.Parameters.Count
+        Select Case qdfData.Parameters(intPtr).Type
+        
+        Case dbInteger
+            qdfData.Parameters(intPtr) = CInt(mvarParm(intPtr))
+                
+        Case dbLong
+            qdfData.Parameters(intPtr) = CLng(mvarParm(intPtr))
+                
+        Case dbDouble
+            qdfData.Parameters(intPtr) = CDbl(mvarParm(intPtr))
+            
+        Case dbDate, adDBTimeStamp
+            qdfData.Parameters(intPtr) = CDate(mvarParm(intPtr))
+                
+        Case Else
+            qdfData.Parameters(intPtr) = mvarParm(intPtr)
+            
+        End Select
+    
+        intPtr = intPtr + 1
+    Loop
+    
+    Set rstData = qdfData.OpenRecordset(dbOpenForwardOnly)
+    
+    lvwPopulateFromRS rstData, intKey, bolShowKey, bolAutosize, bolRefresh
+    
+    rstData.Close
+    Set rstData = Nothing
+    qdfData.Close
+    Set qdfData = Nothing
+    
+End Sub
+
+' populates listview with data based on recordset
+Public Sub lvwPopulateFromRS(rstData As Object, _
+                                Optional intKey As Integer, _
+                                Optional bolShowKey As Boolean, _
+                                Optional bolAutosize As Boolean = True, _
+                                Optional bolRefresh As Boolean)
+'On Error Resume Next
+    Dim fldItem As Object
+    Dim lvwItem As ListItem
+    Dim intFirst As Integer
+    Dim intField As Integer
+    Dim intItem As Integer
+    Dim intCol As Integer
+    Dim intType As Integer
+    Dim lngType As Long
+    Dim intShadow As Integer
+    Dim intImage As Integer
+    Dim strImage As String
+    Dim strKey As String
+    Dim strItem As String
+    Dim strShadow As String
+    
+    ' refresh off
+    LockWindowUpdate mlvwThis.hWnd
+    
+    ' save options
+    mintKey = intKey
+    mbolShowKey = bolShowKey
+    mbolAutosize = bolAutosize
+    
+    ' if refresh then clear data but leave headers/special columns in place (provided they have been setup)
+    If bolRefresh And mbolSetup Then
+        mlvwThis.ListItems.Clear
+    Else
+    
+        ' clear headers and data
+        mlvwThis.ColumnHeaders.Clear
+        mlvwThis.ListItems.Clear
+        
+        ' keep track of types
+        ReDim Preserve mlngColType(rstData.Fields.Count)
+    
+        ' load column headers
+        intCol = 1
+        For Each fldItem In rstData.Fields
+            If bolShowKey Or intCol <> intKey Then
+        
+                ' no point loading image index
+                If intCol <> mintImageColumn Then
+                    mlvwThis.ColumnHeaders.Add , fldItem.Name, fldItem.Name
+        
+                    ' add shadow column name in tag for numbers and dates
+                    lngType = CLng(fldItem.Type)
+                    Select Case lngType
+            
+                    Case dbInteger, dbLong, dbDouble, dbCurrency, adNumeric
+            
+                        ' first column must be a string and left aligned!
+                        If intCol > 1 Then
+                            mlvwThis.ColumnHeaders(fldItem.Name).Alignment = lvwColumnRight
+                        End If
+                
+                        mlvwThis.ColumnHeaders(fldItem.Name).Tag = mstrShadow & fldItem.Name
+
+                    Case dbDate, adDBTimeStamp
+                        mlvwThis.ColumnHeaders(fldItem.Name).Tag = mstrShadow & fldItem.Name
+        
+                    Case Else
+                    End Select
+                    
+                    ' keep track of types - used for conditional formatting
+                    intType = intType + 1
+                    ReDim Preserve mlngColType(intType)
+                    mlngColType(intType) = lngType
+                End If
+            End If
+        
+            intCol = intCol + 1
+        Next
+    
+        ' add shadow columns for numbers and dates. done this way as shadow columns
+        ' can still be resized - putting them at end leaves only one resize location
+        intCol = mlvwThis.ColumnHeaders.Count
+        intShadow = intCol
+        For intItem = 1 To intCol
+            strShadow = mlvwThis.ColumnHeaders(intItem).Tag
+            If strShadow <> "" Then
+                intShadow = intShadow + 1
+                mlvwThis.ColumnHeaders.Add , strShadow, strShadow
+            
+                ' point display to shadow
+                mlvwThis.ColumnHeaders(intItem).Tag = intShadow
+            
+                ' hide shadow
+                mlvwThis.ColumnHeaders(intShadow).Width = 0
+            End If
+        Next
+
+        ' special find column
+        mintFind = intShadow
+        mlvwThis.ColumnHeaders.Add , mstrFind, mstrFind
+        mlvwThis.ColumnHeaders(mintFind + 1).Width = 0
+        mlvwThis.ColumnHeaders(mintFind + 1).Tag = ""
+        
+        ' flag columns setup
+        mbolSetup = True
+    End If
+
+    ' item to add first
+    If intKey = 1 And Not bolShowKey Then
+        intFirst = 2
+        If mintImageColumn = 2 Then
+            intFirst = 3
+        End If
+    Else
+        intFirst = 1
+        If mintImageColumn = 1 Then
+            intFirst = 2
+        End If
+    End If
+
+    ' loop through records
+    Do Until rstData.EOF
+        ' loop through fields
+        intField = 1
+        intItem = 1
+        intCol = 1
+        For Each fldItem In rstData.Fields
+            Call fGetFieldValues(fldItem, strItem, strShadow)
+
+            ' precede by "[" to force string as required by MS in their eternal wisdom
+            If intField = intKey Then
+                strKey = "[" & LCase(fldItem.value)
+            End If
+
+            If bolShowKey Or intField <> intKey Then
+
+                ' image column?
+                If intField = mintImageColumn Then
+                    If IsNumeric(strItem) Then
+                        intImage = CInt(strItem)
+                        strImage = ""
+                    Else
+                        strImage = strItem
+                        intImage = 0
+                    End If
+                Else
+                    If (intField = intFirst) Then
+                        Set lvwItem = mlvwThis.ListItems.Add(, , strItem)
+                    Else
+                        lvwItem.SubItems(intItem) = strItem
+                        intItem = intItem + 1
+                    End If
+            
+                    ' shadow column?
+                    If IsNumeric(mlvwThis.ColumnHeaders(intCol).Tag) Then
+                        intShadow = CInt(mlvwThis.ColumnHeaders(intCol).Tag)
+                        If intShadow > 0 Then
+                            lvwItem.SubItems(intShadow - 1) = strShadow
+                        End If
+                    End If
+                
+                    intCol = intCol + 1
+                End If
+            End If
+
+            intField = intField + 1
+        Next
+
+        ' key and find column
+        lvwItem.Key = strKey
+        lvwItem.SubItems(mintFind) = cstrFindDefault
+
+        ' set image?
+        If mintImageIndex > 0 Then
+            lvwItem.SmallIcon = mintImageIndex
+        ElseIf mstrImageKey <> "" Then
+            lvwItem.SmallIcon = mstrImageKey
+        ElseIf intImage > 0 Then
+            lvwItem.SmallIcon = intImage
+            
+        ' note that mnemonics are case sensitive - thanks MS
+        ElseIf strImage <> "" Then
+            lvwItem.SmallIcon = strImage
+        End If
+    
+        ' any conditions?
+        If mbolCondition Then
+            Call lvwApplyConditionsItem(lvwItem)
+        End If
+        
+        rstData.MoveNext
+    Loop
+    
+    ' auto size?
+    If bolAutosize Then
+        lvwResize cdblMargin
+    End If
+    
+    ' grid lines if anything returned
+    mlvwThis.GridLines = intField > 0
+    
+    ' turn off first selected (gets selected by default)
+    If mlvwThis.GridLines Then
+        mlvwThis.ListItems(1).Selected = False
+    End If
+    
+    ' any hidden columns?
+    If mstrHidden <> "" Then
+        Call fHideColumns
+    End If
+    
+    ' causes flicker on refresh
+    If Not bolRefresh Then
+        'mctlThis.SetFocus
+    End If
+    
+    ' refresh on
+    LockWindowUpdate 0&
+    
+    ' clean up
+    Set fldItem = Nothing
+    Set lvwItem = Nothing
+    
+End Sub
+
+Private Sub fHideColumns()
+
+    Dim strHidden As String
+    Dim intPtr As Integer
+    Dim strCol As String
+    
+    strHidden = mstrHidden
+    Do While Len(strHidden) > 0
+        
+        ' held in form ;col1;;col2;
+        intPtr = InStr(2, strHidden, ";")
+        If intPtr > 0 Then
+            strCol = Mid(strHidden, 2, intPtr - 2)
+            Call lvwHideColumn(strCol, True)
+            strHidden = Mid(strHidden, intPtr + 1)
+                
+        ' something wrong - bail out
+        Else
+            strHidden = ""
+        End If
+    Loop
+
+End Sub
+
+' returns field type, formatted item and shadow (if required)
+Private Function fGetFieldValues(fldItem As Object, ByRef strItem As String, ByRef strShadow As String) As Long
+
+    Dim strValue As String
+    Dim strFormat As String
+    
+    ' right justified nulls cause listview problems
+    strValue = Nz(fldItem.value, " ")
+    Select Case CLng(fldItem.Type)
+                
+    Case dbInteger
+        strItem = Format(strValue, mstrFormatInt)
+        If strValue = " " Then
+            strShadow = Format(-100000000000# + 1000000000000#, mstrShadowInt)
+        Else
+            strShadow = Format(CLng(strValue) + 1000000000000#, mstrShadowInt)
+        End If
+        
+    Case dbLong
+        strItem = Format(strValue, mstrFormatLong)
+        If strValue = " " Then
+            strShadow = Format(-100000000000# + 1000000000000#, mstrShadowLong)
+        Else
+            strShadow = Format(CDbl(strValue) + 1000000000000#, mstrShadowLong)
+        End If
+        
+        
+    Case dbDouble
+        strItem = Format(strValue, mstrFormatDouble)
+        If strValue = " " Then
+            strShadow = Format(-100000000000# + 1000000000000#, mstrShadowDouble)
+        Else
+            strShadow = Format(CDbl(strValue + 1000000000000#), mstrShadowDouble)
+        End If
+        
+    Case adNumeric
+        strItem = Format(strValue, mstrFormatDouble)
+        If strValue = " " Then
+            strShadow = Format(-100000000000# + 1000000000000#, mstrShadowDouble)
+        Else
+            strShadow = Format(CDbl(strValue + 1000000000000#), mstrShadowDouble)
+        End If
+        
+    Case dbDate, adDBTimeStamp
+        strItem = Format(strValue, mstrFormatDate)
+        strShadow = Format(strValue, mstrShadowDate)
+                
+    Case Else
+        strItem = strValue
+        strShadow = ""
+        
+    End Select
+
+    fGetFieldValues = CLng(fldItem.Type)
+    
+End Function
+
+Public Sub lvwApplyConditions(Optional bolSelected As Boolean = True)
+
+    Dim lvwItem As ListItem
+    
+    ' refresh off
+    LockWindowUpdate mlvwThis.hWnd
+    
+    For Each lvwItem In mlvwThis.ListItems
+        If (lvwItem.Selected And bolSelected) Or Not bolSelected Then
+            Call lvwApplyConditionsItem(lvwItem)
+        End If
+    Next
+    mlvwThis.Refresh
+    
+    ' refresh on
+    LockWindowUpdate 0&
+    
+    Set lvwItem = Nothing
+
+End Sub
+
+' programmer responsibility to refresh if called individually
+Public Sub lvwApplyConditionsItem(lvwItem As ListItem, Optional bolRefresh As Boolean)
+
+    Dim intPtr As Integer
+
+    For intPtr = 0 To UBound(mstrCondition)
+        Call fApplyCondition(intPtr, lvwItem)
+    Next
+    If bolRefresh Then
+        mlvwThis.Refresh
+    End If
+    
+End Sub
+
+Private Sub fApplyCondition(intPtr As Integer, lvwItem As ListItem)
+
+    Dim intCol As Integer
+    Dim intVal As Integer
+    Dim lngType As Long
+    Dim strVal As String
+    Dim strCompare As String
+    Dim bolMet As Boolean
+    Dim lvwSubItem As ListSubItem
+    
+    ' if set already just get value
+    If mintConditionCol(intPtr) > 0 Then
+        strCompare = CStr(mvarConditionVal(intPtr))
+        intCol = mintConditionCol(intPtr)
+    Else
+        intCol = lvwGetColumnNo(mstrConditionCol(intPtr))
+        If intCol = 0 Then
+            Exit Sub
+        Else
+            mintConditionCol(intPtr) = intCol
+        End If
+        
+        ' convert condition value
+        Select Case mlngColType(intCol)
+                
+        Case dbInteger, dbLong
+            strCompare = Format(mvarConditionVal(intPtr), mstrShadowInt)
+                    
+        Case dbDouble
+            strCompare = Format(mvarConditionVal(intPtr), mstrShadowDouble)
+                
+        Case dbDate, adDBTimeStamp
+            strCompare = Format(mvarConditionVal(intPtr), mstrShadowDate)
+                    
+        Case Else
+            strCompare = LCase(CStr(mvarConditionVal(intPtr)))
+                    
+        End Select
+        mvarConditionVal(intPtr) = strCompare
+    End If
+                
+    ' get value to compare
+    If IsNumeric(mlvwThis.ColumnHeaders(intCol).Tag) Then
+        intVal = CInt(mlvwThis.ColumnHeaders(intCol).Tag)
+    Else
+        intVal = intCol
+    End If
+    If intVal = 1 Then
+        strVal = LCase(lvwItem.Text)
+    Else
+        strVal = LCase(lvwItem.SubItems(intVal - 1))
+    End If
+                
+    ' evaluate
+    Select Case Left(mstrCondition(intPtr), 2)
+                
+    Case "="
+        bolMet = strVal = strCompare
+                    
+    Case "<"
+        bolMet = strVal < strCompare
+                    
+    Case ">"
+        bolMet = strVal < strCompare
+                    
+    Case "<>"
+        bolMet = strVal <> strCompare
+                
+    Case "<="
+        bolMet = strVal <= strCompare
+                    
+    Case ">="
+        bolMet = strVal >= strCompare
+                        
+    ' begins with
+    Case "b"
+        bolMet = Left(strVal, Len(strCompare)) = strCompare
+                    
+    ' contains
+    Case "c"
+        bolMet = InStr(strVal, strCompare) > 0
+                
+    ' does not contain
+    Case "d"
+        bolMet = InStr(strVal, strCompare) = 0
+                    
+    ' ends with
+    Case "e"
+        bolMet = Right(strVal, Len(strCompare)) = strCompare
+                    
+    Case Else
+        bolMet = False
+                
+    End Select
+                
+    If bolMet Then
+
+        ' apply to entire row or column?
+        If mbolConditionRow(intPtr) Then
+            lvwItem.ForeColor = mlngConditionColor(intPtr)
+            lvwItem.Bold = mbolConditionBold(intPtr)
+            For Each lvwSubItem In lvwItem.ListSubItems
+                lvwSubItem.ForeColor = mlngConditionColor(intPtr)
+                lvwSubItem.Bold = mbolConditionBold(intPtr)
+            Next
+        Else
+            If mintConditionCol(intPtr) = 1 Then
+                lvwItem.ForeColor = mlngConditionColor(intPtr)
+                lvwItem.Bold = mbolConditionBold(intPtr)
+            Else
+                lvwItem.ListSubItems(intCol - 1).ForeColor = mlngConditionColor(intPtr)
+                lvwItem.ListSubItems(intCol - 1).Bold = mbolConditionBold(intPtr)
+            End If
+        End If
+    End If
+
+    Set lvwSubItem = Nothing
+    
+End Sub
+
+' refresh existing data set
+Public Sub lvwRefreshRS(rstData As Object, Optional bolKeep As Boolean, Optional bolFound As Boolean)
+
+    Dim strKeys As String
+        
+    ' store selected/found keys?
+    If bolKeep Then
+        strKeys = lvwGetKeys(bolFound, False)
+    End If
+    
+    ' repopulate with original options
+    Call lvwPopulateFromRS(rstData, mintKey, mbolShowKey, mbolAutosize, True)
+        
+    If bolKeep Then
+        Call lvwSelectKeys(strKeys)
+    End If
+    
+End Sub
+
+' refresh existing data set
+Public Sub lvwRefreshSQL(Optional bolKeep As Boolean, Optional bolFound As Boolean)
+
+    Dim strKeys As String
+        
+    ' if from query
+    If mstrQuery <> "" Then
+    
+        ' store selected/found keys?
+        If bolKeep Then
+            strKeys = lvwGetKeys(bolFound, False)
+        End If
+    
+        ' repopulate with original options
+        Call lvwPopulateFromSQL(mstrQuery, mintKey, mbolShowKey, mbolAutosize, True)
+            
+        If bolKeep Then
+            Call lvwSelectKeys(strKeys)
+        End If
+    End If
+    
+End Sub
+
+' refresh existing data set
+Public Sub lvwRefreshQuery(Optional bolKeep As Boolean, Optional bolFound As Boolean)
+
+    Dim strKeys As String
+    Dim intPtr As Integer
+    
+    ' if from query
+    If mstrQuery <> "" Then
+        Debug.Print "Refresh List " & mstrQuery
+    
+        ' store selected/found keys?
+        If bolKeep Then
+            strKeys = lvwGetKeys(bolFound, False)
+        End If
+    
+        ' repopulate with original options
+        Call lvwPopulateFromQuery(mstrQuery, mintKey, mbolShowKey, mbolAutosize, True)
+            
+        If bolKeep Then
+            Call lvwSelectKeys(strKeys)
+        End If
+        
+        ' clear linked lists and forms
+        lvwClearLinked
+    End If
+    
+End Sub
+
+Public Sub lvwShowColumn(strColumn As String)
+    Call lvwHideColumn(strColumn, False)
+End Sub
+
+Public Sub lvwHideColumn(strColumn As String, Optional bolHide As Boolean = True)
+
+    Dim lngCol As Long
+    
+    ' keep track of column - means that functionality will work even if data not retrieved yet
+    If bolHide Then
+        Call fSetHidden(strColumn)
+    Else
+        Call fSetHidden(strColumn, False)
+    End If
+    
+    lngCol = lvwGetColumnNo(strColumn)
+    If lngCol > 0 Then
+        With mlvwThis
+        
+            If bolHide Then
+                .ColumnHeaders(lngCol).Width = 0
+                
+            Else
+                SendMessage .hWnd, _
+                            LVM_SETCOLUMNWIDTH, _
+                            lngCol, _
+                            ByVal LVSCW_AUTOSIZE_USEHEADER
+        
+                If cdblMargin <> 0 Then
+                    .ColumnHeaders(lngCol).Width = .ColumnHeaders(lngCol).Width + .ColumnHeaders(lngCol).Width * cdblMargin
+                End If
+            
+            End If
+        End With
+    End If
+    
+End Sub
+
+Public Function lvwIsHiddenColumn(strColumn As String) As Boolean
+    lvwIsHiddenColumn = InStr(mstrHidden, ";" & LCase(strColumn) & ";") > 0
+End Function
+
+' add or remove column from hidden list
+Private Sub fSetHidden(strColumn As String, Optional bolAdd As Boolean = True)
+
+    Dim intPtr As Integer
+    
+    ' need to tokenise column so partial matches fail
+    strColumn = ";" & LCase(strColumn) & ";"
+    intPtr = InStr(mstrHidden, strColumn)
+    If bolAdd Then
+        If intPtr = 0 Then
+            mstrHidden = mstrHidden & strColumn
+        End If
+    ElseIf intPtr > 0 Then
+        mstrHidden = Left(mstrHidden, intPtr - 1) & Mid(mstrHidden, intPtr + Len(strColumn))
+    End If
+
+End Sub
+
+Public Sub lvwShowColumnNo(intColumn As Integer)
+
+    Call lvwHideColumn(lvwGetColumnName(intColumn), False)
+    
+End Sub
+
+Public Sub lvwHideColumnNo(intColumn As Integer)
+
+    Call lvwHideColumn(lvwGetColumnName(intColumn), True)
+    
+End Sub
+
+' return column name from number
+Public Function lvwGetColumnName(intColumn As Integer) As String
+
+    If intColumn > 0 And intColumn <= mlvwThis.ColumnHeaders.Count Then
+        lvwGetColumnName = mlvwThis.ColumnHeaders(intColumn)
+    End If
+
+End Function
+
+' return column number from name
+Public Function lvwGetColumnNo(strColumn As String) As Integer
+
+    Dim chd As ColumnHeader
+    Dim intCol As Integer
+    Dim strChar As String
+    Dim strTest As String
+    Dim intPtr As Integer
+    
+    ' strip brackets?
+    strColumn = LCase(Trim(strColumn))
+    If Left(strColumn, 1) = "[" Then
+        strColumn = Mid(strColumn, 2)
+    End If
+    If Right(strColumn, 1) = "]" Then
+        strColumn = Left(strColumn, Len(strColumn) - 1)
+    End If
+    
+    For Each chd In mlvwThis.ColumnHeaders
+        intCol = intCol + 1
+        
+        ' check not preceeded with sort or shadow indicator
+        strTest = chd.Text
+        For intPtr = 1 To 2
+            strChar = Left(strTest, 1)
+            If strChar = mstrArrowUp Or strChar = mstrArrowDown Or strChar = mstrShadow Then
+                strTest = Mid(strTest, 2)
+            End If
+        Next
+        
+        If LCase(strTest) = strColumn Then
+            lvwGetColumnNo = intCol
+            Exit For
+        End If
+    Next
+    
+    Set chd = Nothing
+
+End Function
+
+' returns a "#" separated list of values for a column
+Public Function lvwGetColumnValues(strColumn As String, bolSelected As Boolean) As String
+
+    Dim intCol As Integer
+    Dim lvwItem As ListItem
+    Dim strValues As String
+    
+    intCol = lvwGetColumnNo(strColumn)
+    If intCol > 0 Then
+        For Each lvwItem In mlvwThis.ListItems
+            If (lvwItem.Selected And bolSelected) Or Not bolSelected Then
+                If intCol = 1 Then
+                    strValues = strValues & lvwItem.Text & "#"
+                Else
+                    strValues = strValues & lvwItem.SubItems(intCol - 1) & "#"
+                End If
+            End If
+        Next
+    End If
+    
+    lvwGetColumnValues = strValues
+    
+    Set lvwItem = Nothing
+
+End Function
+
+Public Function lvwGetColumnTotal(strColumn As String, bolSelected As Boolean) As String
+
+    Dim intCol As Integer
+    Dim lvwItem As ListItem
+    Dim dblTotal As Double
+    
+    intCol = lvwGetColumnNo(strColumn)
+    If intCol > 0 Then
+        For Each lvwItem In mlvwThis.ListItems
+            If (lvwItem.Selected And bolSelected) Or Not bolSelected Then
+                If intCol = 1 Then
+                    If IsNumeric(lvwItem.Text) Then
+                        dblTotal = dblTotal + CDbl(lvwItem.Text)
+                    End If
+                Else
+                    If IsNumeric(lvwItem.SubItems(intCol - 1)) Then
+                        dblTotal = dblTotal + CDbl(lvwItem.SubItems(intCol - 1))
+                    End If
+                End If
+            End If
+        Next
+    End If
+    
+    lvwGetColumnTotal = dblTotal
+    
+    Set lvwItem = Nothing
+
+End Function
+
+Public Function lvwGetColumnValue(strColumn As String) As String
+
+    Dim intCol As Integer
+    
+    If Not mlvwThis.SelectedItem Is Nothing Then
+        If LCase(strColumn) = "<key>" Then
+            lvwGetColumnValue = lvwGetKey()
+        Else
+            intCol = lvwGetColumnNo(strColumn)
+            If intCol = 1 Then
+                lvwGetColumnValue = Trim(mlvwThis.SelectedItem.Text)
+            ElseIf intCol > 0 Then
+                lvwGetColumnValue = Trim(mlvwThis.SelectedItem.SubItems(intCol - 1))
+            End If
+        End If
+    End If
+
+End Function
+
+' select a comma separated set of keys, returns index of first found
+Public Function lvwSelectKeys(strKeys As String) As Long
+
+    Dim intPtr As Integer
+    Dim strKey As String
+    Dim lngFirst As Long
+    Dim lngThis As Long
+    Dim lvwItem As ListItem
+    
+    For Each lvwItem In mlvwThis.ListItems
+        lvwItem.Selected = False
+    Next
+    
+    Do While Len(strKeys) <> 0
+        intPtr = InStr(strKeys, ",")
+        If intPtr > 0 Then
+            strKey = Left(strKeys, intPtr - 1)
+            strKeys = Mid(strKeys, intPtr + 1)
+        Else
+            strKey = strKeys
+            strKeys = ""
+        End If
+        
+        ' record first
+        lngThis = lvwSelectKey(strKey)
+        If lngFirst = 0 Then
+            lngFirst = lngThis
+        End If
+    Loop
+    
+    ' scroll to first?
+    If lngFirst > 0 Then
+        mlvwThis.ListItems(lngFirst).EnsureVisible
+        lvwSelectKeys = lngFirst
+    End If
+    
+End Function
+
+' select a key, returns index (row) if found
+Public Function lvwSelectKey(strKey As String) As Long
+
+    Dim lvwItem As ListItem
+    
+    For Each lvwItem In mlvwThis.ListItems
+        If Mid(lvwItem.Key, 2) = strKey Then
+            lvwSelectKey = lvwItem.Index
+            lvwItem.Selected = True
+            lvwItem.EnsureVisible
+            Exit For
+        End If
+    Next
+    
+    Set lvwItem = Nothing
+
+End Function
+
+' resizes columns of listview to max data/header width
+Public Sub lvwResize(Optional dblPercPad As Double)
+
+    Dim lngCol As Long
+    Dim chd As ColumnHeader
+
+    For Each chd In mlvwThis.ColumnHeaders
+    
+        ' hide shadow and hidden columns
+        If (Left(chd.Text, 1) = mstrShadow And Not mbolShowShadow) _
+        Or lvwIsHiddenColumn(chd.Text) Then
+            chd.Width = 0
+            
+        ' API call to size column based on column header/data width
+        Else
+            SendMessage mlvwThis.hWnd, _
+                        LVM_SETCOLUMNWIDTH, _
+                        lngCol, _
+                        ByVal LVSCW_AUTOSIZE_USEHEADER
+        
+            If dblPercPad <> 0 Then
+               chd.Width = chd.Width + chd.Width * dblPercPad
+            End If
+        End If
+        
+        lngCol = lngCol + 1
+    Next
+    
+    Set chd = Nothing
+
+End Sub
+
+' sort based on column passed in
+Public Sub lvwSort(ByVal chdColumn As ColumnHeader, Optional booKeepExistingOrder As Boolean = False)
+
+    Dim intIndex As Integer
+    Dim chdHead As ColumnHeader
+    Dim lvwItem As ListItem
+    Dim strSort As String
+    Dim intPtr As Integer
+    
+    LockWindowUpdate mlvwThis.hWnd
+     
+    With mlvwThis
+    
+        ' use shadow column?
+        If IsNumeric(chdColumn.Tag) Then
+            intIndex = CInt(chdColumn.Tag)
+            If intIndex > 0 Then
+                intIndex = intIndex - 1
+            End If
+        Else
+            intIndex = chdColumn.Index - 1
+        End If
+        
+        ' save sort column
+        mstrSort = Replace(Replace(lvwGetColumnName(intIndex + 1), "«", ""), "»", "")
+        
+        ' remove indicator - done this way as it may be mid column if column was hidden after sort
+        For Each chdHead In .ColumnHeaders
+            intPtr = InStr(chdHead.Text, mstrArrowUp)
+            If intPtr > 0 Then
+                chdHead.Text = Left(chdHead.Text, intPtr - 1) & Mid(chdHead.Text, intPtr + 1)
+                Exit For
+            Else
+                intPtr = InStr(chdHead.Text, mstrArrowDown)
+                If intPtr > 0 Then
+                    chdHead.Text = Left(chdHead.Text, intPtr - 1) & Mid(chdHead.Text, intPtr + 1)
+                    Exit For
+                End If
+            End If
+        Next
+        
+        If Not booKeepExistingOrder Then
+            If intIndex = mintFind Then
+                .SortKey = intIndex
+                .SortOrder = lvwAscending
+            ' ascending on new column
+            ElseIf .SortKey <> intIndex Then
+                .SortKey = intIndex
+                .SortOrder = lvwAscending
+                strSort = mstrArrowUp
+                
+            ' toggle existing
+            ElseIf .SortOrder = lvwAscending Then
+                .SortOrder = lvwDescending
+                strSort = mstrArrowDown
+            Else
+                .SortOrder = lvwAscending
+                strSort = mstrArrowUp
+            End If
+        Else
+            .SortKey = intIndex
+            If .SortOrder = lvwAscending Then
+                strSort = mstrArrowUp
+            Else
+                strSort = mstrArrowDown
+            End If
+        End If
+        .Sorted = -1
+        
+        ' add indicator
+        chdColumn.Text = strSort & chdColumn.Text
+        
+        ' scroll to first selected
+        For Each lvwItem In .ListItems
+            If lvwItem.Selected Then
+                lvwItem.EnsureVisible
+                Exit For
+            End If
+        Next
+        
+        ' resize in case marker increased width
+        lvwResize cdblMargin
+    End With
+    
+    LockWindowUpdate 0&
+    
+    ' clean up
+    Set chdHead = Nothing
+    Set lvwItem = Nothing
+
+End Sub
+
+Private Sub fSaveToFile(strQuery As String, strFileName As String, Optional bolCSV As Boolean)
+    If bolCSV Then
+        DoCmd.TransferText acExportDelim, , strQuery, strFileName, True
+    Else
+        DoCmd.TransferSpreadsheet acExport, acSpreadsheetTypeExcel12Xml, strQuery, strFileName
+    End If
+End Sub
+
+' save selected/found items to file (default excel and selected items)
+Public Function lvwSaveSelected(strFileName As String, Optional bolCSV As Boolean, Optional bolFound As Boolean) As Boolean
+
+    Dim qdfTemp As QueryDef
+    Dim strSQL As String
+    Dim strKey As String
+    
+    ' key specified
+    If mstrKeyName <> "" Then
+    
+        ' string of keys
+        strSQL = lvwGetKeys(bolFound, True)
+        
+        ' any found?
+        If strSQL <> "" Then
+        
+            ' delete query if it exists
+            For Each qdfTemp In CurrentDb.QueryDefs
+                If qdfTemp.Name = mstrSave Then
+                    CurrentDb.QueryDefs.Delete mstrSave
+                    Exit For
+                End If
+            Next
+
+            ' select from initiating query
+            strSQL = "SELECT * FROM " & mstrQuery & _
+                        " WHERE " & mstrKeyName & " IN (" & strSQL & ")"
+        
+            ' create temporary query, export, delete
+            Set qdfTemp = CurrentDb.CreateQueryDef(mstrSave, strSQL)
+            Call fSaveToFile(qdfTemp.Name, strFileName, bolCSV)
+            CurrentDb.QueryDefs.Delete qdfTemp.Name
+            
+            lvwSaveSelected = True
+        End If
+    End If
+
+End Function
+      
+' set color of selected row
+Public Sub lvwSetRowColor(ByVal lngRow As Long, Optional lngColor As Long, Optional bolBold As Boolean)
+
+    Dim lvwSubItem As ListSubItem
+    
+    With mlvwThis
+    
+        ' valid row?
+        If lngRow > 0 And lngRow <= .ListItems.Count Then
+        
+            With .ListItems(lngRow)
+        
+                ' first column
+                .ForeColor = lngColor
+                .Bold = bolBold
+        
+                ' others
+                For Each lvwSubItem In .ListSubItems
+                    lvwSubItem.ForeColor = lngColor
+                    lvwSubItem.Bold = bolBold
+                Next
+            End With
+            
+            .Refresh
+        End If
+    End With
+    
+    Set lvwSubItem = Nothing
+    
+End Sub
+
+' highlight selected column
+Public Sub lvwSetColumnColor(intColumn As Long, Optional lngColor As Long, Optional bolBold As Boolean)
+
+    Dim lvwItem As ListItem
+    
+    With mlvwThis
+    
+        For Each lvwItem In .ListItems
+            With lvwItem.ListSubItems(intColumn - 1)
+                .ForeColor = lngColor
+                .Bold = bolBold
+            End With
+        Next
+        
+        .Refresh
+    End With
+
+    Set lvwItem = Nothing
+    
+End Sub
+
+' highlight selected cell
+Public Sub lvwSetCellColor(lngRow As Long, lngColumn As Long, Optional lngColor As Long, Optional bolBold As Boolean)
+      
+    With mlvwThis
+    
+        ' valid row?
+        If lngRow > 0 And lngRow <= .ListItems.Count Then
+        
+            With .ListItems(lngRow).ListSubItems(lngColumn - 1)
+                .ForeColor = lngColor
+                .Bold = bolBold
+            End With
+            
+            .Refresh
+        End If
+    End With
+    
+End Sub
+
+' find item (after row if specified) and select if found as default
+Public Function lvwFind(strFind As String, Optional ByVal lngAfterRow As Long, Optional bolSelect As Boolean = True) As Long
+
+    Dim lvwItem As ListItem
+    Dim lvwSubItem As ListSubItem
+    Dim bolFound As Boolean
+    
+    strFind = LCase(strFind)
+    
+    LockWindowUpdate mlvwThis.hWnd
+    
+    With mlvwThis
+        '~ Find
+        Do While lngAfterRow < .ListItems.Count
+            lngAfterRow = lngAfterRow + 1
+            Set lvwItem = .ListItems(lngAfterRow)
+            
+            ' check text
+            If InStr(LCase(lvwItem.Text), strFind) > 0 Then
+                bolFound = True
+                Exit Do
+                
+            ' check sub items
+            Else
+                For Each lvwSubItem In lvwItem.ListSubItems
+                    If InStr(LCase(lvwSubItem.Text), strFind) > 0 Then
+                        bolFound = True
+                        Exit Do
+                    End If
+                Next
+            End If
+        Loop
+        
+        If bolFound Then
+            If bolSelect Then
+                lvwItem.Selected = True
+                lvwItem.EnsureVisible
+                .Refresh
+            End If
+            lvwFind = lvwItem.Index
+        Else
+            lvwFind = 0
+        End If
+    End With
+    
+    'mctlThis.SetFocus
+    
+    LockWindowUpdate 0&
+
+    ' clean up
+    Set lvwItem = Nothing
+    Set lvwSubItem = Nothing
+    
+End Function
+
+' select/highlight all rows/cells matching value
+Public Function lvwFindHighlight(strFind As String, Optional lngColor As Long, Optional intColumn As Integer, _
+                                    Optional bolSelect As Boolean, Optional bolSort As Boolean, Optional bolBold As Boolean) As Long
+
+    Dim lvwItem As ListItem
+    Dim lvwSubItem As ListSubItem
+    Dim intShadow As Integer
+    Dim bolFound As Boolean
+    Dim lngFirst As Long
+    Dim lngCount As Long
+    
+    LockWindowUpdate mlvwThis.hWnd
+    
+    strFind = LCase(strFind)
+    
+    ' allow finds to stack?
+    If Not mbolKeepFind Then
+        lvwReset
+    End If
+   
+    With mlvwThis
+    
+        ' if searching on one column check shadow also
+        If intColumn > 0 Then
+            If IsNumeric(.ColumnHeaders(intColumn).Tag) Then
+                intShadow = CInt(.ColumnHeaders(intColumn).Tag)
+            End If
+        End If
+
+        For Each lvwItem In .ListItems
+            
+            ' check text (0 = all, 1 = first)
+            If intColumn < 2 Or intColumn = intShadow - 1 Then
+                If InStr(LCase(lvwItem.Text), strFind) > 0 Then
+                    lvwItem.ForeColor = lngColor
+                    lvwItem.Bold = bolBold
+                    bolFound = True
+                    
+                    ' save first key
+                    If lngFirst = 0 Then
+                        lngFirst = lvwItem.Index
+                    End If
+                End If
+            End If
+                
+            ' check sub items - ignore find column
+            For Each lvwSubItem In lvwItem.ListSubItems
+                If (intColumn = 0 Or (lvwSubItem.Index = intColumn - 1 Or lvwSubItem.Index = intShadow - 1)) And lvwSubItem.Index < mintFind Then
+                    If InStr(LCase(lvwSubItem.Text), strFind) > 0 Then
+                        lvwSubItem.ForeColor = lngColor
+                        lvwSubItem.Bold = bolBold
+                        bolFound = True
+                    
+                        ' save first key
+                        If lngFirst = 0 Then
+                            lngFirst = lvwItem.Index
+                        End If
+                    End If
+                End If
+            Next
+            
+            ' mark it
+            If bolFound Then
+            
+                ' set find item
+                mlngFind = mlngFind + 1
+                lvwItem.ListSubItems(mintFind) = Format(mlngFind, String(Len(cstrFindDefault), "0"))
+                bolFound = False
+                
+                ' count of THIS find
+                lngCount = lngCount + 1
+                
+                ' select it?
+                If .MultiSelect And bolSelect Then
+                    lvwItem.Selected = True
+                End If
+            End If
+        Next
+        
+        ' any found?
+        If lngCount > 0 Then
+        
+            ' sort and set to top
+            If bolSort Then
+                Call lvwSort(.ColumnHeaders(mintFind + 1))
+                .ListItems(1).EnsureVisible
+                
+            ' select first found
+            ElseIf bolSelect Then
+                .ListItems(lngFirst).Selected = True
+                .ListItems(lngFirst).EnsureVisible
+                
+            ' scroll to first found
+            Else
+                .ListItems(lngFirst).EnsureVisible
+            End If
+            
+        End If
+        
+        .Refresh
+    End With
+    
+    'mctlThis.SetFocus
+
+    LockWindowUpdate 0&
+    
+    ' how many
+    lvwFindHighlight = lngCount
+    
+    ' clean up
+    Set lvwItem = Nothing
+    Set lvwSubItem = Nothing
+    
+End Function
+
+' find a specific key
+Public Function lvwFindKey(strKey As String, Optional bolSelect As Boolean) As Long
+
+    Dim lvwItem As ListItem
+    
+    strKey = "[" & LCase(strKey)
+    For Each lvwItem In mlvwThis.ListItems
+        If lvwItem.Key = strKey Then
+            lvwItem.Selected = bolSelect
+            lvwFindKey = lvwItem.Index
+            Exit For
+        End If
+    Next
+    
+    ' clean up
+    Set lvwItem = Nothing
+    
+End Function
+
+' returns selected key
+Public Function lvwGetKey() As String
+
+    If Not mlvwThis.SelectedItem Is Nothing Then
+        lvwGetKey = Mid(mlvwThis.SelectedItem.Key, 2)
+    End If
+
+End Function
+
+' returns keys for selected or found items
+Public Function lvwGetKeys(Optional bolFound As Boolean, Optional bolQuotes As Boolean = True) As String
+
+    Dim lvwItem As ListItem
+    Dim strSQL As String
+    Dim strKey As String
+
+    For Each lvwItem In mlvwThis.ListItems
+            
+        ' marked as found/selected?
+        If (bolFound And lvwItem.ListSubItems(mintFind) <> cstrFindDefault) _
+        Or (Not bolFound And lvwItem.Selected) Then
+                
+            ' chop off "["
+            strKey = Mid(lvwItem.Key, 2)
+            Select Case mstrKeyType
+                    
+            Case "number"
+                strSQL = strSQL & "," & strKey
+                
+            ' default string
+            Case Else
+                If bolQuotes Then
+                    strSQL = strSQL & ",'" & strKey & "'"
+                Else
+                    strSQL = strSQL & "," & strKey
+                End If
+                
+            End Select
+        End If
+    Next
+    
+    lvwGetKeys = Mid(strSQL, 2)
+    
+    Set lvwItem = Nothing
+
+End Function
+
+Public Sub lvwSelectAll(bolSelect As Boolean)
+
+    Dim lvwItem As ListItem
+    
+    LockWindowUpdate mlvwThis.hWnd
+
+    For Each lvwItem In mlvwThis.ListItems
+        If lvwItem.Selected <> bolSelect Then
+            lvwItem.Selected = bolSelect
+        End If
+    Next
+    mlvwThis.Refresh
+    
+    LockWindowUpdate 0&
+
+    Set lvwItem = Nothing
+    
+End Sub
+
+' reset everything
+Public Sub lvwReset(Optional bolSelectOff As Boolean = True)
+
+    Dim lvwItem As ListItem
+    Dim lvwSubItem As ListSubItem
+    Dim intPtr As Integer
+    
+    LockWindowUpdate mlvwThis.hWnd
+    
+    Debug.Print "Reset List " & mstrQuery
+    
+    ' reset counter
+    mlngFind = 0
+    
+    For Each lvwItem In mlvwThis.ListItems
+    
+        ' select off, no color, no bold
+        lvwItem.ForeColor = 0
+        If bolSelectOff Then
+            lvwItem.Selected = False
+        End If
+        lvwItem.Bold = False
+        
+        ' sub item color off, no bold
+        For Each lvwSubItem In lvwItem.ListSubItems
+            lvwSubItem.ForeColor = 0
+            lvwSubItem.Bold = False
+        Next
+        
+        ' reset find key
+        lvwItem.ListSubItems(mintFind) = cstrFindDefault
+    Next
+    mlvwThis.Refresh
+    
+    ' nothing clicked
+    mbolClicked = False
+    
+    LockWindowUpdate 0&
+    
+    ' clear linked listviews and forms
+    If bolSelectOff Then
+        lvwClearLinked
+    End If
+
+    ' clean up
+    Set lvwItem = Nothing
+    Set lvwSubItem = Nothing
+    
+End Sub
+
+' clear everything
+Public Sub lvwClear()
+
+    'Debug.Print "Clear List " & mstrQuery
+
+    mlvwThis.ListItems.Clear
+    
+    ' nothing selected
+    mbolClicked = False
+    
+    lvwClearLinked
+   
+End Sub
+
+Public Sub lvwClearLinked()
+
+    lvwClearLinkedForms
+    lvwClearLinkedLists
+    
+End Sub
+
+Public Sub lvwClearLinkedLists()
+
+    Dim intPtr As Integer
+    
+    If mbolLinkList Then
+        For intPtr = 0 To UBound(mclsLinkList)
+            mclsLinkList(intPtr).lvwClear
+        Next
+    End If
+    
+End Sub
+
+Public Sub lvwClearLinkedForms()
+
+    Dim intPtr As Integer
+    
+    If mbolLinkForm Then
+        For intPtr = 0 To UBound(mclsLinkForm)
+            mclsLinkForm(intPtr).frmClear
+        Next
+    End If
+    
+End Sub
+
+Public Sub lvwSetImage(intIndex As Integer)
+
+    Dim lvwItem As ListItem
+    
+    LockWindowUpdate mlvwThis.hWnd
+    
+    For Each lvwItem In mlvwThis.ListItems
+        lvwItem.SmallIcon = intIndex
+    Next
+        
+    LockWindowUpdate 0&
+    
+    Set lvwItem = Nothing
+
+End Sub
+
+Public Function lvwGetCellValue(ByVal x As Long, ByVal y As Long) As String
+
+    Dim HTI As LVHITTESTINFO
+    Dim lvwItem As ListItem
+
+    With HTI
+        .pt.x = (x \ TwipsPerPixelX)
+        .pt.y = (y \ TwipsPerPixelY)
+        .flags = LVHT_ONITEM
+    End With
+     
+    Call SendMessage(mlvwThis.hWnd, LVM_SUBITEMHITTEST, 0, HTI)
+
+    If (HTI.iItem > -1) Then
+        Set lvwItem = mlvwThis.ListItems(HTI.iItem + 1)
+        If HTI.iSubItem = 0 Then
+            lvwGetCellValue = Trim(lvwItem.Text)
+        Else
+            lvwGetCellValue = Trim(lvwItem.SubItems(HTI.iSubItem))
+        End If
+    End If
+    
+    Set lvwItem = Nothing
+    
+End Function
+
+Public Function lvwGetCellReference(ByVal x As Long, ByVal y As Long) As String
+
+    Dim HTI As LVHITTESTINFO
+    Dim lvwItem As ListItem
+
+    With HTI
+        .pt.x = (x \ TwipsPerPixelX)
+        .pt.y = (y \ TwipsPerPixelY)
+        .flags = LVHT_ONITEM
+    End With
+     
+    Call SendMessage(mlvwThis.hWnd, LVM_SUBITEMHITTEST, 0, HTI)
+
+    If (HTI.iItem > -1) Then
+        Set lvwItem = mlvwThis.ListItems(HTI.iItem + 1)
+        If HTI.iSubItem = 0 Then
+            lvwGetCellReference = 0
+        Else
+            lvwGetCellReference = HTI.iSubItem
+        End If
+    End If
+    
+    Set lvwItem = Nothing
+    
+End Function
+
+Public Function lvwRowCount() As Long
+
+    lvwRowCount = mlvwThis.ListItems.Count
+    
+End Function
+
+Public Function lvwSelectedCount() As Long
+
+    Dim lvwItem As ListItem
+    Dim lngCount As Long
+   
+    For Each lvwItem In mlvwThis.ListItems
+        If lvwItem.Selected Then
+            lngCount = lngCount + 1
+        End If
+    Next
+    
+    lvwSelectedCount = lngCount
+        
+    Set lvwItem = Nothing
+    
+End Function
+
+Public Property Let FormatDouble(value As String)
+    mstrFormatDouble = value
+End Property
+
+Public Property Let FormatInt(value As String)
+    mstrFormatInt = value
+End Property
+
+Public Property Let FormatDate(value As String)
+    mstrFormatDate = value
+End Property
+
+Public Property Let ArrowUp(value As String)
+    mstrArrowUp = value
+End Property
+
+Public Property Let ArrowDown(value As String)
+    mstrArrowDown = value
+End Property
+
+Public Property Let ShowShadow(value As Boolean)
+    mbolShowShadow = value
+    lvwResize
+End Property
+
+Public Property Let BackColor(value As Long)
+    mlngBackColor = value
+End Property
+
+Public Property Let KeyName(value As String)
+    mstrKeyName = value
+End Property
+
+Public Property Let KeySeparator(value As String)
+    mstrKeySeparator = value
+End Property
+
+Public Property Let KeyType(value As String)
+    mstrKeyType = LCase(value)
+End Property
+
+Public Property Let KeepFind(value As Boolean)
+    mbolKeepFind = value
+End Property
+
+Public Property Let MultiSelect(value As Boolean)
+
+    With mlvwThis
+        .MultiSelect = value
+    
+        ' turn off
+        If Not .MultiSelect Then
+            Call lvwSelectAll(False)
+        End If
+    End With
+    'mctlThis.SetFocus
+    
+End Property
+
+Public Property Let ListView(value As Control)
+    
+    Set mctlThis = value
+    Set mlvwThis = value.Object
+    
+    lvwClear
+    
+    With mlvwThis
+        '.View = lvwReport
+        .FullRowSelect = True
+        .HideSelection = False
+        .BackColor = mlngBackColor
+        .LabelEdit = lvwManual
+        .GridLines = False
+        .Sorted = False
+        .Font = "Calibri"
+        .Font.Size = 10
+    End With
+
+End Property
+
+Public Property Let ImageList(value As ImageList)
+    Set mlvwThis.SmallIcons = value
+    Set mlvwThis.Icons = value
+End Property
+
+Public Property Let ImageIndex(value As Integer)
+    mintImageIndex = value
+    mstrImageKey = ""
+    mintImageColumn = 0
+End Property
+
+Public Property Let ImageKey(value As String)
+    mstrImageKey = LCase(value)
+    mintImageIndex = 0
+    mintImageColumn = 0
+End Property
+
+Public Property Let ImageColumn(value As Integer)
+    mintImageColumn = value
+    mstrImageKey = ""
+    mintImageIndex = 0
+End Property
+
+Public Property Let ConditionalFormat(value As Boolean)
+
+    Dim lvwItem As ListItem
+    
+    mbolCondition = value
+    If mbolCondition Then
+        For Each lvwItem In mlvwThis.ListItems
+            Call lvwApplyConditionsItem(lvwItem)
+        Next
+    Else
+        Call lvwReset
+    End If
+    
+    Set lvwItem = Nothing
+    
+End Property
+
+Public Property Get lvwControl() As Control
+    Set lvwControl = mctlThis
+End Property
+
+Public Property Let Clicked(value As Boolean)
+    mbolClicked = value
+End Property
+
+Public Property Get Clicked() As Boolean
+    Clicked = mbolClicked
+End Property
+
+Public Property Get SortColumn() As String
+    SortColumn = mstrSort
+End Property
+
+Private Sub Class_Initialize()
+
+    ' default formats
+    mstrFormatDouble = "#,##0.00"
+    mstrFormatInt = "#,##0"
+    mstrFormatDate = "yyyy-mm-dd"
+
+    ' shadow formats - might allow overwrite
+    mstrShadowDouble = String(14, "0") & "." & "0000"
+    mstrShadowInt = String(14, "0")
+    mstrShadowLong = String(14, "0")
+    mstrShadowDate = "yyyymmddhhnnss"
+
+    ' direction arrows
+    mstrArrowUp = Chr(187)
+    mstrArrowDown = Chr(171)
+    
+    ' composite key separator
+    mstrKeySeparator = "|"
+    
+    ' shadow column indicator
+    mstrShadow = Chr(235)
+    mstrFind = mstrShadow
+    
+    ' background
+    mlngBackColor = 16250871
+End Sub
+
+Private Sub Class_Terminate()
+
+    'Set mlvwThis.SmallIcons = Nothing
+
+End Sub
+
+Public Sub GotoFirst()
+    GotoRowNumber 1
+End Sub
+
+Public Sub GotoNext()
+    Dim lvwItem As ListItem
+    
+    If lvwRowCount > 0 Then
+        For Each lvwItem In mlvwThis.ListItems
+            If lvwItem.Selected = True Then
+                If lvwItem.Index + 1 <= lvwRowCount Then
+                    lvwItem.Selected = False
+                    mlvwThis.ListItems(lvwItem.Index + 1).Selected = True
+                    mlvwThis.ListItems(lvwItem.Index + 1).EnsureVisible
+                    Exit For
+                End If
+            End If
+        Next
+    End If
+End Sub
+
+Public Sub GotoPrevious()
+    Dim lvwItem As ListItem
+    
+    If lvwRowCount > 0 Then
+        For Each lvwItem In mlvwThis.ListItems
+            If lvwItem.Selected = True Then
+                If lvwItem.Index - 1 > 0 Then
+                    lvwItem.Selected = False
+                    mlvwThis.ListItems(lvwItem.Index - 1).Selected = True
+                    mlvwThis.ListItems(lvwItem.Index - 1).EnsureVisible
+                    Exit For
+                End If
+            End If
+        Next
+    End If
+End Sub
+
+Public Sub GotoLast()
+    GotoRowNumber mlvwThis.ListItems.Count
+End Sub
+
+Public Sub GotoRowNumber(ByVal lngRowNumber As Long)
+    Dim lvwItem As ListItem
+    
+    If lvwRowCount > 0 And lngRowNumber > 0 And lngRowNumber <= lvwRowCount Then
+        If mlvwThis.MultiSelect Then
+            For Each lvwItem In mlvwThis.ListItems
+                lvwItem.Selected = False
+            Next
+        End If
+        mlvwThis.ListItems(lngRowNumber).Selected = True
+        mlvwThis.ListItems(lngRowNumber).EnsureVisible
+    End If
+End Sub
+
+Public Function SelectedRowNumber() As Long
+    Dim lvwItem As ListItem
+    Dim booFound As Boolean
+    
+    SelectedRowNumber = 0
+    If lvwRowCount > 0 Then
+        For Each lvwItem In mlvwThis.ListItems
+            If lvwItem.Selected = True Then
+                SelectedRowNumber = lvwItem.Index
+                booFound = True
+                Exit For
+            End If
+        Next
+    End If
+End Function
+
+' sort based on column passed in
+Public Sub lvwSortColumn(ByVal strColumn As String, ByVal booKeepExistingOrder As Boolean)
+
+    Dim chdHead As ColumnHeader
+    Dim intPtr As Integer
+    Dim booFound As Boolean
+    
+    strColumn = LCase(strColumn)
+    For Each chdHead In mlvwThis.ColumnHeaders
+        intPtr = InStr(LCase(chdHead.Text), strColumn)
+        If intPtr > 0 Then
+            booFound = True
+            Call lvwSort(chdHead, booKeepExistingOrder)
+            Exit For
+        End If
+    Next
+    
+    If booFound = False Then
+        lvwSort mlvwThis.ColumnHeaders(mlvwThis.ColumnHeaders.Count)
+        lvwSort mlvwThis.ColumnHeaders(1), False '~ Added to default to first row if it can't find other
+    End If
+    Set chdHead = Nothing
+
+End Sub
+
+
+

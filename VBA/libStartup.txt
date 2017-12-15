@@ -1,0 +1,613 @@
+Attribute VB_Name = "libStartup"
+
+Option Compare Database
+Option Explicit
+Private Const cstrModule As String = "libStartup"
+
+'~ ***************************************************************
+'  Customisible Procedure that is used on launch for this app only
+'~ ***************************************************************
+Private Function fInitialiseApp() As Boolean
+Const cstrProcedure As String = "fInitialiseApp"
+On Error GoTo ErrorHandler
+        
+'~ The purpose of this procedure is to allow the developer to call application specific procedures to be run at start-up.
+'---------------------------------------
+    fInitialiseApp = True
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fStartApp(ByRef frm As Form) As Boolean
+Const cstrProcedure As String = "fStartApp"
+On Error GoTo ErrorHandler
+    Dim strAccessCheck As String
+    Dim strMessage As String
+    Dim strMainText As String
+    Const cintMaxSteps As Integer = 7
+
+'~ Main startup code
+'---------------------------------------
+    '~ Which app are we loading?
+    fProcessStep 1, cintMaxSteps
+    strMainText = "Loading " & SYSVarGetText(True, "GTY_AppNameShort")
+    fDisplayMessages strMainText
+    
+    DoCmd.Hourglass True
+    Application.Echo False
+    frm.Visible = True
+    
+    'Initialise Active Directory.
+    fDisplayMessages "", "Collecting user data..."
+    If fGetUserID Then
+        fProcessStep 2, cintMaxSteps
+        fDisplayMessages "", "User data compiled"
+    Else
+        fStartApp = False
+        strMessage = "Failed getting user details from active directory"
+        GoTo ErrorHandler
+    End If
+    
+    'Setup the application
+    fDisplayMessages "", "Establising connection to backends..."
+    If fSetupApp Then
+        fProcessStep 3, cintMaxSteps
+        fDisplayMessages "", "Connections established"
+    Else
+        fStartApp = False
+        strMessage = "Failed Setup"
+        GoTo ErrorHandler
+    End If
+    
+    'Populate tblSYSVarLocal with application specific information from the Gateway.
+    fDisplayMessages "", "Downloading data..."
+    If fSetAppVariables Then
+        fProcessStep 4, cintMaxSteps
+        fDisplayMessages "", "Data download completed"
+    Else
+        fStartApp = False
+        strMessage = "Failed updating local variables"
+        GoTo ErrorHandler
+    End If
+
+    'Set application specific procedures.
+    fDisplayMessages "", "Initialising application..."
+    If fInitialiseApp Then
+        fProcessStep 5, cintMaxSteps
+        fDisplayMessages "", "Initialising completed"
+    Else
+        fStartApp = False
+        strMessage = "Failed initialising the application"
+        GoTo ErrorHandler
+    End If
+
+    'Initialise the Access environment.
+    If fSetStartupProperties Then
+        fProcessStep 6, cintMaxSteps
+        fDisplayMessages "", "Startup properties completed"
+    Else
+        fStartApp = False
+        strMessage = "Failed setting the startup properties"
+        GoTo ErrorHandler
+    End If
+    'If not Support, validate application startup checks and inform User of any problems.
+    fProcessStep cintMaxSteps, cintMaxSteps
+    If Not fIsSupport Then
+        fDisplayMessages "", "Launching..."
+        fPause 0.5
+        If gstrUserID = SYSVarGetText(True, "SYS_AutomatedUser") Then
+            LogUserIn
+            SYSVarSet True, "SYS_AutoRun", 1
+            DoCmd.OpenForm SYSVarGetText(True, "SYS_MainForm")
+        Else
+            If fApplicationAccessChecks(strAccessCheck) Then '~ Perform main startup
+                LogUserIn
+                SYSVarSet True, "SYS_AutoRun", 0
+                DoCmd.OpenForm "frmAPPMain"
+            Else
+                strMessage = strAccessCheck
+                GoTo ErrorHandler
+            End If
+        End If
+    Else
+        fDisplayMessages "", "Opening development mode"
+        fPause 0.5
+        SYSVarSet True, "SYS_AutoRun", 0
+    End If
+'-- JRC: Added support for a reference check for DLL breaks
+    Call CheckReferenceProperties
+'---------------------------------------
+ExitProcedure:
+    On Error Resume Next
+    Application.Echo True
+    DoCmd.Hourglass False
+    Exit Function
+ErrorHandler:
+    If Err.Number > 0 Then
+        strMessage = Err.Number & ": " & Err.Description
+        fError cstrModule, cstrProcedure, Err.Number, strMessage, False
+    End If
+    If SYSVarGetByte(True, "SYS_AutoRun") = 0 Then
+        MsgBox strMessage & vbCrLf & vbCrLf & "Application shutting down...", vbCritical + vbOKOnly, "Access Denied" '~ Access Denied, explain why.
+    End If
+    Application.Echo True
+    DoCmd.Hourglass False
+    fApplicationExit
+End Function
+
+'~ ***************************************************************
+'  Private Procedures
+'~ ***************************************************************
+Private Function fSetupApp() As Boolean
+Const cstrProcedure As String = "fSetupApp"
+On Error GoTo ErrorHandler
+
+'~ Entry point for setup of the app.
+'---------------------------------------
+    fSetupApp = True 'Presume success.
+
+    'Refresh Gateway connection.
+    fDisplayMessages "", "Establising connection to Gateway..."
+    If Not fRefreshGTYLinkedViews Then
+        fSetupApp = False
+        GoTo ExitProcedure
+    End If
+    
+    '~ Refresh SQL server links
+    fDisplayMessages "", "Establising connection to " & SYSVarGetText(True, "GTY_AppNameShort") & "..."
+    If Not fRefreshAPPLinkedViews Then  '~ Refresh app SQL server connection
+        fSetupApp = False
+        GoTo ExitProcedure
+    End If
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    fSetupApp = False
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fSetStartupProperties(Optional ByVal booForceLock As Boolean = False) As Boolean
+Const cstrProcedure As String = "fSetStartupProperties"
+On Error GoTo ErrorHandler
+    Dim strEnvPath As String
+    Dim strApiID As String
+    
+'Initialises the Access environments properties.
+'---------------------------------------
+    strApiID = SYSVarGetText(True, "GTY_API_ID")
+    strEnvPath = Nz(GetSingleValueFromRecordset("SELECT PATH FROM GTY_vwGateway WHERE AI_ID = '" & SYSVarGetText(True, "GTY_API_ID") & "'"), "")
+    Application.RefreshTitleBar
+    fChangeProperty "StartUpForm", dbText, "frmSYSLaunch"
+    fChangeProperty "AppTitle", dbText, SYSVarGetText(True, "GTY_AppNameShort") & " | Version " & SYSVarGetText(True, "GTY_Version") & " | Environment: " & SYSVarGetText(True, "GTY_Environment")
+    fChangeProperty "AppIcon", dbText, strEnvPath & SYSVarGetText(True, "SYS_AppIconName")
+    
+    If fIsSupport And Not booForceLock Then
+        fChangeProperty "ShowDocumentTabs", dbBoolean, True
+        fChangeProperty "StartupShowDBWindow", dbBoolean, True
+        fChangeProperty "StartupShowStatusBar", dbBoolean, True
+        fChangeProperty "StartupMenuBar", dbBoolean, True
+        fChangeProperty "StartupShortCutMenuBar", dbBoolean, True
+        fChangeProperty "AllowFullMenus", dbBoolean, True
+        fChangeProperty "AllowShortCutMenus", dbBoolean, True
+        fChangeProperty "AllowBuiltinToolbars", dbBoolean, True
+        fChangeProperty "AllowToolbarChanges", dbBoolean, True
+        fChangeProperty "AllowSpecialKeys", dbBoolean, True
+        fChangeProperty "AllowBreakIntoCode", dbBoolean, True
+        fChangeProperty "AllowBypassKey", dbBoolean, True
+        DoCmd.ShowToolbar "Ribbon", acToolbarYes
+        DoCmd.ShowToolbar "Status Bar", acToolbarYes
+        Call DoCmd.SelectObject(acTable, , True) '~ Unhides the Navigation Pane
+    Else
+        fChangeProperty "ShowDocumentTabs", dbBoolean, False
+        fChangeProperty "StartupShowDBWindow", dbBoolean, False
+        fChangeProperty "StartupShowStatusBar", dbBoolean, False
+        fChangeProperty "StartupShortCutMenuBar", dbBoolean, False
+        fChangeProperty "AllowFullMenus", dbBoolean, False
+        fChangeProperty "AllowShortCutMenus", dbBoolean, True
+        fChangeProperty "AllowBuiltinToolbars", dbBoolean, True
+        fChangeProperty "AllowToolbarChanges", dbBoolean, False
+        fChangeProperty "AllowSpecialKeys", dbBoolean, False
+        fChangeProperty "AllowBreakIntoCode", dbBoolean, False
+        fChangeProperty "AllowBypassKey", dbBoolean, False
+        DoCmd.ShowToolbar "Ribbon", acToolbarNo
+        DoCmd.ShowToolbar "Status Bar", acToolbarNo
+        DoCmd.NavigateTo "acNavigationCategoryObjectType" 'Set the focus to the Navigation Pane.
+        DoCmd.RunCommand acCmdWindowHide 'Hide the Navigation Pane.
+    End If
+    
+    fSetStartupProperties = True
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    fSetStartupProperties = False
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fChangeProperty(strPropName As String, varPropType As Variant, varPropValue As Variant) As Boolean
+Const cstrProcedure As String = "fChangeProperty"
+On Error GoTo ErrorHandler
+    Const conPropNotFoundError = 3270
+    Dim db As DAO.Database
+    Dim prp As DAO.Property
+    
+'Changes the passed MSAccess property. See fSetStartupProperties() to which properties are changed.
+'---------------------------------------
+    fChangeProperty = True
+    Set db = CurrentDb()
+    db.Properties(strPropName) = varPropValue
+    fChangeProperty = True
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    fClose db
+    Exit Function
+ErrorHandler:
+    If Err = conPropNotFoundError Then
+        Set prp = db.CreateProperty(strPropName, varPropType, varPropValue)
+        db.Properties.Append prp
+        Resume Next
+    Else
+        fChangeProperty = False
+        fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+        Resume ExitProcedure
+    End If
+    Application.RefreshTitleBar
+End Function
+'~ ***************************************************************
+Public Function fSetAppVariables() As Boolean
+Const cstrProcedure As String = "fSetAppVariables"
+On Error GoTo ErrorHandler
+    Dim strSQL As String
+    Dim rst As DAO.Recordset
+
+'Populates tblSYSVarLocal with application specific information from the Gateway.
+'---------------------------------------
+    'Return the application specific variable information from the SQL Server vwGateway view.
+    strSQL = "SELECT APP_NME, ENVIRONMENT, BUS_NME, TCH_NME, VERSION, APP_DESC, USER_GUIDE_PATH, APP_BUS_NME, APP_NME_LNG "
+    strSQL = strSQL & "FROM GTY_vwGateway "
+    strSQL = strSQL & "GROUP BY APP_NME, ENVIRONMENT, BUS_NME, TCH_NME, VERSION, APP_DESC, AI_ID, USER_GUIDE_PATH, APP_BUS_NME, APP_NME_LNG "
+    strSQL = strSQL & "HAVING (((AI_ID)='" & SYSVarGetText(True, "GTY_API_ID") & "'));"
+    Set rst = CurrentDb.OpenRecordset(strSQL)
+    
+    'Make sure we have a valid GTY_API_ID.
+    If rst.EOF Then
+        fSetAppVariables = False
+        GoTo ExitProcedure
+    End If
+    
+    'Assign values to global variables.
+    gstrUserID = fADGetUserID
+    gstrAppNameShort = rst!APP_NME
+    
+    'Handle the situation where an Applications 'long name' has not entered in the Gateway.
+    If fIsNothing(rst!APP_NME_LNG) Then
+         Call SYSVarSet(True, "GTY_AppNameLong", gstrAppNameShort)
+    Else
+        Call SYSVarSet(True, "GTY_AppNameLong", rst!APP_NME_LNG)
+    End If
+    
+    'Write the vsariable information to the local variable table.
+    Call SYSVarSet(True, "GTY_Version", rst!VERSION)
+    Call SYSVarSet(True, "GTY_USER_ID", fADGetUserID)
+    Call SYSVarSet(True, "GTY_UserName", fADGetFullName)
+    Call SYSVarSet(True, "GTY_AppNameShort", rst!APP_NME)
+    Call SYSVarSet(True, "GTY_BusinessOwner", rst!BUS_NME)
+    Call SYSVarSet(True, "GTY_MACHINE_ID", fADGetMachineID)
+    Call SYSVarSet(True, "GTY_TechnicalOwner", rst!TCH_NME)
+    Call SYSVarSet(True, "GTY_AppDescription", rst!APP_DESC)
+    Call SYSVarSet(True, "GTY_Environment", rst!ENVIRONMENT)
+    Call SYSVarSet(True, "GTY_BusinessName", rst!APP_BUS_NME)
+    Call SYSVarSet(True, "GTY_UserGuide", IIf(IsNull(rst!USER_GUIDE_PATH), "Unavailable", rst!USER_GUIDE_PATH))
+    
+    fSetAppVariables = True
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    rst.Close
+    Set rst = Nothing
+    Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fRefreshGTYLinkedViews() As Boolean
+Const cstrProcedure As String = "fRefreshGTYLinkedViews"
+On Error GoTo ErrorProcedure:
+    Dim tdfItem As DAO.TableDef
+    Dim strConnection As String
+    Dim RS As DAO.Recordset
+    Dim lngCount As Long
+    Dim lngTimer As Long
+'~ Refresh the Gateway linked views
+'---------------------------------------
+    Set RS = CurrentDb.OpenRecordset("SELECT * FROM tblSYSGatewayConnection WHERE CON_ID = 'CON01'", dbReadOnly)
+
+    '~ Build connection string
+    If Not RS.EOF Then
+        strConnection = "ODBC;"
+        strConnection = strConnection & "DRIVER={SQL Server};"
+        strConnection = strConnection & "SERVER=" & RS.Fields("SERVER") & ";"
+        If RS.Fields("USE_TRUSTED") = 1 Then
+            strConnection = strConnection & "Trusted_Connection=Yes;"
+        Else
+            strConnection = strConnection & "UID=" & RS.Fields("USER_ID") & ";"
+            strConnection = strConnection & "PWD=" & RS.Fields("PASSWORD") & ";"
+        End If
+        strConnection = strConnection & "DATABASE=" & RS.Fields("DATABASE") & ";"
+        strConnection = strConnection & "APP=" & RS.Fields("APP_NME")
+        
+    End If
+    
+    '-- We have a connection string therefore... use it!
+    If Not fIsNothing(strConnection) Then
+        lngTimer = Timer
+        For Each tdfItem In CurrentDb.TableDefs
+            If Timer > lngTimer + 0.5 Then
+                lngTimer = Timer
+                lngCount = lngCount + 1
+            End If
+            fDisplayMessages "", "Establising connection to Gateway" & Space(Round(lngCount / 1, 0) Mod 3) & "..."
+            
+            If Left(tdfItem.Name, 3) = "GTY" And Left(tdfItem.Name, 1) <> "~" And InStr(tdfItem.Connect, "ODBC") > 0 Then
+                tdfItem.Connect = strConnection
+                tdfItem.RefreshLink
+            End If
+        Next
+        fRefreshGTYLinkedViews = True
+    End If
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+    RS.Close
+    Set RS = Nothing
+Exit Function
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    fRefreshGTYLinkedViews = False
+    Resume ExitProcedure
+    Resume
+End Function
+'~ ***************************************************************
+Public Function fRefreshAPPLinkedViews() As Boolean
+Const cstrProcedure As String = "fRefreshAPPLinkedViews"
+On Error GoTo ErrorProcedure:
+    Dim tdfItem As DAO.TableDef
+    Dim strConnection As String
+    Dim RS As DAO.Recordset
+    Dim lngCount As Long
+    Dim lngTimer As Long
+    
+'~ Refresh the Application linked views (if any)
+'---------------------------------------
+    Set RS = CurrentDb.OpenRecordset("SELECT * FROM qrySYSApplicationConnectionString WHERE APP_ID = '" & SYSVarGetText(False, "GTY_APP_ID") & "'", dbReadOnly)
+    
+    '~ Build connection string
+    If Not RS.EOF Then
+        strConnection = RS.Fields("ConnectionStringObject")
+    End If
+    
+    '-- We have a connection string therefore... use it!
+    If Not fIsNothing(strConnection) Then
+        lngTimer = Timer
+        For Each tdfItem In CurrentDb.TableDefs
+            If Timer > lngTimer + 0.5 Then
+                lngTimer = Timer
+                lngCount = lngCount + 1
+            End If
+            fDisplayMessages "", "Establising connection to " & SYSVarGetText(True, "GTY_AppNameShort") & Space(Round(lngCount / 1, 0) Mod 3) & "..."
+        
+            If Left(tdfItem.Name, 3) <> "GTY" And Left(tdfItem.Name, 1) <> "~" And InStr(tdfItem.Connect, "ODBC") > 0 Then
+                tdfItem.Connect = strConnection
+                tdfItem.RefreshLink
+            End If
+        Next
+    End If
+    
+    fRefreshAPPLinkedViews = True
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+    RS.Close
+    Set RS = Nothing
+Exit Function
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    fRefreshAPPLinkedViews = False
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fDisplayMessages(ByVal strMain As String, Optional ByVal strSub As String = "") As Boolean
+Const cstrProcedure As String = "fDisplayMessages"
+On Error GoTo ErrorHandler
+    Dim frm As Form
+    Set frm = Forms("frmSYSLaunch")
+    
+'~ Displays a message to indicate the stage of launch
+'---------------------------------------
+    '~ main text
+    If Not fIsNothing(strMain) Then
+        frm.txtLoading.value = strMain
+    End If
+    
+    '~ Sub Text
+    frm.txtLoadingDetail.value = strSub
+    
+    frm.Repaint
+    fDisplayMessages = True
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    Exit Function
+ErrorHandler:
+    fDisplayMessages = False
+    'fError cstrModule, cstrProcedure, Err.Number, Err.Description, False
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Private Function fApplicationAccessChecks(ByRef strAccess As String) As Boolean
+Const cstrProcedure As String = "fApplicationAccessChecks"
+On Error GoTo ErrorProcedure
+    Dim rst As DAO.Recordset
+    Dim booPassed As Boolean
+    Dim strCurrentAppPath As String
+    
+'This function is designed to determine a number of factors to be checked before allowing a user access
+'to the application. Returns the value 'Granted' or the reason why access has been denied.
+'---------------------------------------
+    '~~ CHECK #1 - Can the application access the SQL server app details?
+    Set rst = CurrentDb.OpenRecordset("qryGTYApplicationCurrentVersionDetails", dbReadOnly)
+    If rst.BOF And rst.EOF Then
+        strAccess = "Cannot connect to the Local Applications main library."
+        GoTo ExitProcedure
+    End If
+
+    '~~CHECK #2 - Does the User have access to the BE location?
+    If Not fCheckAccessRights(rst!Path) Then
+        strAccess = "You do not have access to " & gstrAppNameShort & "'s database folder(s)."
+        GoTo ExitProcedure
+    End If
+ 
+    '~~CHECK #3 - Has the application been run From Gateway?
+'    If Not AllowAppRun(SYSVarGetText(False, "GTY_APP_ID"), SYSVarGetText(False, "GTY_ENV_ID"), gstrUserID) Then
+'        strAccess = gstrAppNameShort & " must be executed via the Gateway."
+'        GoTo ExitProcedure
+'    End If
+        
+    '~~CHECK #4 - Has the application been launched from the correct location?
+    strCurrentAppPath = UCase(CurrentProject.Path & "\")
+    If InStr(strCurrentAppPath, SYSVarGetText(False, "SYS_LaunchLocation")) = 0 Then
+        strAccess = "You are attempting to run " & gstrAppNameShort & " outside it's launch location." & vbCrLf & vbCrLf & "Please ensure the application is executed correctly."
+        GoTo ExitProcedure
+    End If
+
+    '~~CHECK #5 - Version Check.
+    If Not SYSVarGetText(True, "GTY_API_ID") = SYSVarGetText(False, "GTY_API_ID") Then
+        strAccess = "Version sync failed for " & gstrAppNameShort & "." & vbCrLf & vbCrLf & "Please re-launch Gateway in a few minutes."
+        GoTo ExitProcedure
+    End If
+
+    '~~Final Verdict.
+    strAccess = "Granted"
+    booPassed = True
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    fClose rst
+    fApplicationAccessChecks = booPassed 'Output result.
+    Exit Function
+ErrorProcedure:
+    booPassed = False
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, False
+    strAccess = "Access Denied." & vbCrLf & vbCrLf & "An error occurred during the permission check." & vbCrLf & vbCrLf & "Please contact the Business Owner for this application."
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Private Function fCheckAccessRights(ByVal strFolderPath As String) As Boolean
+Const cstrProcedure As String = "fCheckAccessRights"
+On Error GoTo ErrorProcedure
+    Dim strTestPath As String
+    
+'Returns True if a file can be created in the passed folders path.
+'---------------------------------------
+    strTestPath = fAddTrailingSlash(strFolderPath) & "Scrap.txt" 'Generate a test file.
+    
+    Open strTestPath For Output As #1 'See if we can write the file to strTestPath.
+    Close #1
+    
+    Kill strTestPath 'Delete the test file.
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    fCheckAccessRights = True
+Exit Function
+ErrorProcedure:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, False
+    fCheckAccessRights = False
+End Function
+'~ ***************************************************************
+Private Function fProcessStep(ByVal intStep As Integer, ByRef intTotalSteps As Integer) As Boolean
+Const cstrProcedure As String = "fProcessStep"
+On Error GoTo ErrorHandler
+    Const intMaxWidth As Integer = 14
+    Dim frm As Form
+    Set frm = Forms("frmSYSLaunch")
+    
+'The purpose of this procedure is to allow the developer to call application specific procedures to be run at start-up.
+'---------------------------------------
+    frm.txtLoadingBar.Width = ((intMaxWidth / intTotalSteps) * intStep) * gclngTwips '~ 567 is twips
+    frm.Repaint
+    fProcessStep = True
+'---------------------------------------
+
+ExitProcedure:
+    On Error Resume Next
+    Exit Function
+ErrorHandler:
+    fProcessStep = False
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, False
+    Resume ExitProcedure
+End Function
+Public Sub CheckReferenceProperties(Optional ByVal bolListAllReferencesToFile As Boolean = False)
+Const cstrProcedure As String = "CheckReferenceProperties"
+On Error GoTo ErrorHandler
+Dim ref As Reference
+Dim strErrMsg As String
+
+    If bolListAllReferencesToFile = True Then
+        Open CurrentProject.Path & "\LAG_ReferenceCheck_" & fGetUserID & "_" & Format(Now, "yyyymmddhhnnss") & ".txt" For Output As #1
+    End If
+'-- Enumerate through References collection.
+    For Each ref In References
+        If bolListAllReferencesToFile = True Then
+            Print #1, ref.Name & IIf(ref.IsBroken = True, " - APPEARS TO BE MISSING!", "")
+            Print #1, "------------------------------------------------------------------------------------------------"
+            Print #1, "GUID   : " & ref.Guid
+            Print #1, "Version: " & ref.Major & "." & ref.Minor
+            Print #1, "Path   : " & ref.FullPath
+            Print #1, "Broken : " & IIf(ref.IsBroken = True, "YES", "No")
+            Print #1, " "
+        Else
+        '-- Check IsBroken property.
+            If ref.IsBroken = True Then
+            '-- Construct the message containing the broken reference
+                strErrMsg = "MissingRef: " & ref.Name & "(GUID: [" & ref.Guid & "], Ver: " & ref.Major & "." & ref.Minor & ")"
+            '-- Log the error
+                SYSErrorWriter fADGetUserID, cstrModule, cstrProcedure, 5001, strErrMsg, 0
+            End If
+        End If
+    Next ref
+ExitProcedure:
+    On Error Resume Next
+    Close #1
+    Exit Sub
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+    Resume
+End Sub
+'~ ***************************************************************
+
+
+

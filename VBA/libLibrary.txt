@@ -1,0 +1,424 @@
+Attribute VB_Name = "libLibrary"
+Option Compare Database
+Option Explicit
+
+'~ ****************************************************************************************************************************************
+'-- MODULE NAME    : libLibrary
+
+'-- DESCRIPTION    : Contains all non-specific functions that are used in the launch and promotion of an application
+
+'-- AUTHORS        : James Cronshaw
+'                    James Williams
+'                    Warren van Duesbury
+
+'-- CHANGE HISTORY : 13/11/2014 (Updated for upgrade to template)
+'                  : 04/08/2016 (OA Migration changes)
+
+'-- API's          : SetWindowPos
+'                  : apiShowWindow
+
+'-- FUNCTIONS      : GetConnection                  - Generates the Connection String for either GAteway or the application based upon supplied connection ID from Local variable table.
+'                                                   - Stores connection strings in a global variable to not repeatedly build string
+'                  : fApplicationExit               - Run to exit an application through a single procedure
+'                  : fIsSupport                     - Are we running in development or not
+'                  : fAddTrailingSlash              - Adds an ending \ (for use with folder paths) if there isn't one
+'                  : fError                         - Single procedure for managing errors
+'                  : fClose                         - Closes objects
+'                  : fSYSMsg                        - Displays a form with messages for user
+'                  : fIsNothing                     - Check if string is vbnullstring or null
+'                  : GetSingleValueFromRecordset    - Get a single values from a recordset based upon supplied SQL
+'                  : fCountRecs                     - Counts the number of records for a supplied SQL statement
+
+'-- REFERENCES     : NONE
+'~ ****************************************************************************************************************************************
+
+'---Positioning variables and api's-----
+Public Declare Function SetWindowPos Lib "user32" (ByVal hWnd As Long, ByVal hWndInsertAfter As Long, ByVal x As Long, ByVal y As Long, ByVal cx As Long, ByVal cy As Long, ByVal wFlags As Long) As Long
+Public Declare Function apiShowWindow Lib "user32" Alias "ShowWindow" (ByVal hWnd As Long, ByVal nCmdShow As Long) As Long
+Public Declare Function GetSystemMetrics Lib "user32" (ByVal lngIndex As Long) As Long
+'---------------------------------------
+
+'---Common application variables--------
+Global gstrUserID As String         '~ Current User
+Global gstrAppNameShort As String   '~ Application short name
+'---------------------------------------
+
+'---Lotus Notes variables---------------
+Global gstrLotusNotesPassword As String
+'---------------------------------------
+
+'---Connection variables----------------
+Global gstrConnection(5, 1) As String '~ To hold full connection strings after 1st use
+'---------------------------------------
+
+'---Global Constants--------------------
+Global Const gclngTwips As Long = 567
+Private Const cstrModule As String = "Form_libLibrary" '~ Module name for error logs
+'---------------------------------------
+
+'~ ***************************************************************
+'~ Generic procedures used in launch and promotion
+'~ ***************************************************************
+Public Function GetConnection(strAPP_ID As String) As String
+Const cstrProcedure As String = "GetConnection"
+On Error GoTo ErrorProcedure
+    Dim RS As DAO.Recordset
+    Dim strConnection As String
+    Dim intNull As Integer
+    Dim a As Integer
+
+'~ Retrieves the connection string for the supplied connection ID
+'---------------------------------------
+    For a = 0 To UBound(gstrConnection()) - 1
+        If fIsNothing(gstrConnection(a, 0)) Then
+            intNull = a
+            Exit For
+        Else
+            If gstrConnection(a, 0) = strAPP_ID Then
+                strConnection = gstrConnection(a, 1)
+                Exit For
+            End If
+        End If
+    Next
+    
+    If fIsNothing(strConnection) Then
+        Set RS = CurrentDb.OpenRecordset("SELECT * FROM qrySYSApplicationConnectionString WHERE APP_ID = '" & strAPP_ID & "'", dbReadOnly)
+        If Not RS.EOF Then
+            strConnection = RS.Fields("ConnectionStringADO")
+        End If
+        
+        gstrConnection(intNull, 0) = strAPP_ID
+        gstrConnection(intNull, 1) = strConnection
+    End If
+
+    GetConnection = strConnection
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+    RS.Close
+    Set RS = Nothing
+Exit Function
+ErrorProcedure:
+    GetConnection = ""
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fApplicationExit() As Boolean
+Const cstrProcedure As String = "fApplicationExit"
+On Error GoTo ErrorProcedure:
+
+'~ Entry point for exiting the application.
+'---------------------------------------
+    If Not fIsSupport Then
+        DoCmd.Hourglass True
+        Application.Echo False
+        LogUserOut '~ Log user out correctly.
+        DoCmd.RunCommand acCmdAppRestore
+            SetWindowPos Application.hWndAccessApp, 0, 0, 0, 1200, 800, 2 ' Reset Window position
+        DoCmd.RunCommand acCmdAppRestore
+        DoCmd.Quit '~ Shut app down.
+    End If
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+    Application.Echo True
+    DoCmd.Hourglass False
+Exit Function
+ErrorProcedure:
+    Application.Quit '~ Unknown error so shut down anyway
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fIsSupport() As Boolean
+Const cstrProcedure As String = "fIsSupport"
+On Error GoTo ErrorHandler
+
+'~ Returns True if the Current User is 'Support'. This works not by accessing a table but checking if the DB is opened in the IFSLocalApps folder. Ony Support has access to this folder.
+'---------------------------------------
+'    fIsSupport = False
+'    If InStr(fAddTrailingSlash(CurrentProject.Path), fAddTrailingSlash(SYSVarGetText(False, "SYS_DevLocation"))) <> 0 Then
+'        fIsSupport = True
+'        GoTo ExitProcedure
+'    End If
+    fIsSupport = True
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fAddTrailingSlash(varIn As Variant) As String
+Const cstrProcedure As String = "fAddTrailingSlash"
+On Error GoTo ErrorHandler
+
+'~ Adds a trailing back-slash to a string if one does not exist.
+'---------------------------------------
+    If Len(varIn) > 0& Then
+        If Right(varIn, 1&) = "\" Then
+            fAddTrailingSlash = varIn
+        Else
+            fAddTrailingSlash = varIn & "\"
+        End If
+    End If
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fError(strModuleName As String, strProcedureName As String, lngErrNumber As Long, strErrorDescription As String, bolDisplayMessage As Boolean, Optional lngErrLineNumber As Long) As Boolean
+Const cstrProcedure As String = "fError"
+On Error GoTo ErrorHandler
+    Dim strErrMsg As String
+    Dim strErrDesc As String
+    Dim bolLogError As Boolean
+
+'~ Global error handler.
+'---------------------------------------
+    'Re-set Access environment actions.
+    DoCmd.Hourglass False
+    Application.Echo True
+    DoCmd.SetWarnings True
+    
+    fSYSMsg 'Remove fSYSMsg if it was currently open when the error occured.
+    
+    'For errors relating to data input, substitute Access's 'cryptic' messages for a 'User friendly' message. (NB: We are not interesetd in logging these errors).
+    strErrDesc = strErrorDescription
+    Select Case lngErrNumber
+    Case 3314
+        strErrDesc = "A required field is missing data. You may have deleted data from a field that " & gstrAppNameShort & " needs. Make sure that all required fields have data or cancel your changes."
+    Case 3022
+        strErrDesc = "A field contains duplicate data that is prohibited. Enter a unique value or cancel your changes."
+    Case 2113
+        strErrDesc = "The value you have entered is not appropriate for this field. Change the value in the field or cancel your changes."
+    Case 2279
+        strErrDesc = "The value you have entered does not fit the format required for this field. Change the value in the field or cancel your changes."
+    Case 3058
+        strErrDesc = "A key field is missing data. You may have deleted data from a field that the system needs. Make sure that all required fields have data or cancel your changes."
+    Case 3201
+        strErrDesc = "You are trying to add a record to a child table with no parent record selected. Please select a parent record first." 'No parent record.
+    
+    'These are MSAccess centric errors that are safe to let pass.
+    Case 2501 'Do menu item cancelled.
+        GoTo ExitProcedure
+    Case 2046 'Save record not available at present.
+        GoTo ExitProcedure
+    Case 2001 'Operation cancelled.
+        GoTo ExitProcedure
+    Case 3021 ' No current record.
+        GoTo ExitProcedure
+    Case 3167 'Record is deleted.
+        GoTo ExitProcedure
+    Case Else
+        bolLogError = True 'If we get here, it means it's not one of the above errors so we need to log it. Set local variable to force logging of the error.
+    End Select
+    
+    'Format the error message.
+    strErrMsg = gstrAppNameShort & " has encountered the following error:" & vbCrLf & vbCrLf
+    strErrMsg = strErrMsg & "Error: " & lngErrNumber & vbCrLf
+    If Not fIsNothing(strProcedureName) Then
+        strErrMsg = strErrMsg & "Procedure: " & strProcedureName & vbCrLf 'Add the procedure name if one was passed.
+    End If
+    strErrMsg = strErrMsg & "Description: " & strErrDesc 'Concatenate the error message.
+    
+    'If we have an error we want to record, write it to the error log.
+    If bolLogError Then
+        SYSErrorWriter fADGetUserID, strModuleName, strProcedureName, lngErrNumber, strErrDesc, lngErrLineNumber
+    End If
+    
+    'If required, display the error message to the User.
+    If bolDisplayMessage Then
+        If Not gstrUserID = SYSVarGetText(True, "SYS_AutomatedUser") Then
+            MsgBox strErrMsg, vbInformation, gstrAppNameShort
+        End If
+    End If
+    
+    fError = True
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorHandler:
+    SYSErrorWriter fADGetUserID, strModuleName, strProcedureName, lngErrNumber, strErrDesc, lngErrLineNumber
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fClose(ByRef vObject As Object) As Boolean
+Const cstrProcedure As String = "fClose"
+On Error GoTo ErrorHandler
+
+'~ Closes and sets passed objects to Nothing.
+'---------------------------------------
+    vObject.Close
+    Set vObject = Nothing
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorHandler:
+    Select Case Err.Number
+    Case 91, 438, 3420 'Know errors that are safe to let pass.
+    Case Else
+        fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    End Select
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fSYSMsg(Optional strMsg) As Boolean
+Const cstrProcedure As String = "fSYSMsg"
+On Error Resume Next
+    Dim frm As Form
+
+'~ Opens frmSYSMsg to display a message to the user. If strMsg is passed (50 chrs max), then display the message else close the form 'frmSYSMsg'.
+'---------------------------------------
+    If IsMissing(strMsg) Then
+        DoCmd.Close acForm, "frmSYSMsg"
+        DoCmd.Hourglass False
+    Else
+        DoCmd.OpenForm "frmSYSMsg"
+        Set frm = Forms("frmSYSMsg")
+        frm.lblMsgCaption.Caption = strMsg
+        frm.Repaint
+        frm.SetFocus
+        DoCmd.Hourglass True
+        Set frm = Nothing
+    End If
+    DoEvents
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fIsNothing(varVal As Variant) As Boolean
+Const cstrProcedure As String = "fIsNothing"
+On Error GoTo ErrorHandler
+
+'~ Returns True if the value passed is Empty, Null or a zero length string.
+'---------------------------------------
+    fIsNothing = Len(varVal & vbNullString) = 0
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function GetSingleValueFromRecordset(ByVal strSQL As String) As Variant
+Const cstrProcedure As String = "GetSingleValueFromRecordset"
+On Error GoTo ErrorHandler
+    Dim varTemp As Variant
+    Dim rsSVR As DAO.Recordset
+
+'~ Returns the 1st value from the SQL supplied
+'---------------------------------------
+    '-- Open recordset based upon passed in SQL
+    Set rsSVR = CurrentDb.OpenRecordset(strSQL)
+    '-- Loop through all returned records (should only be one)
+    Do Until rsSVR.EOF = True
+        varTemp = Nz(rsSVR.Fields(0).value, "")
+        rsSVR.MoveNext
+    Loop
+    
+'-- Return the value
+    GetSingleValueFromRecordset = varTemp
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+    rsSVR.Close
+    Set rsSVR = Nothing
+Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fCountRecs(strSQL As String) As Long
+Const cstrProcedure As String = "fCountRecs"
+On Error GoTo ErrorHandler
+    Dim rst As DAO.Recordset
+    
+'~ Returns the number of records returned from the supplied SQL
+'---------------------------------------
+    Set rst = CurrentDb.OpenRecordset(strSQL, dbOpenSnapshot)
+    fCountRecs = 0
+    If Not rst.EOF And Not rst.BOF Then
+        rst.MoveLast
+        fCountRecs = rst.RecordCount
+    End If
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+    rst.Close
+    Set rst = Nothing
+Exit Function
+ErrorHandler:
+    fCountRecs = 0
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fReturnLogoPath() As String
+Const cstrProcedure As String = "fReturnLogoPath"
+On Error GoTo ErrorHandler
+    Dim strPath As String
+
+'~ Returns the logo Path
+'---------------------------------------
+    strPath = fAddTrailingSlash(GetSingleValueFromRecordset("SELECT PATH FROM qryGTYApplicationCurrentVersionDetails")) & SYSVarGetText(True, "SYS_AppIconDisplayPath")
+    If Dir(strPath) <> "" Then
+        fReturnLogoPath = strPath
+    End If
+'---------------------------------------
+
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorHandler:
+    fReturnLogoPath = ""
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************
+Public Function fPause(NumberOfSeconds As Double) As Boolean
+Const cstrProcedure As String = "fPause"
+On Error GoTo ErrorHandler
+
+'Used to pause code for the passed number of seconds.
+'---------------------------------------
+    Dim PauseTime As Double, start As Double
+    PauseTime = NumberOfSeconds
+    start = Timer
+    Do While Timer < start + PauseTime
+        DoEvents
+    Loop
+'---------------------------------------
+ExitProcedure:
+On Error Resume Next
+Exit Function
+ErrorHandler:
+    fError cstrModule, cstrProcedure, Err.Number, Err.Description, True
+    Resume ExitProcedure
+End Function
+'~ ***************************************************************

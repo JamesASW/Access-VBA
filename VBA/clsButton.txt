@@ -1,0 +1,177 @@
+VERSION 1.0 CLASS
+BEGIN
+  MultiUse = -1  'True
+END
+Attribute VB_Name = "clsButton"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+Option Compare Database
+Option Explicit
+
+Private mcmdButton() As CommandButton
+Private mbolInitial() As Boolean
+Private mfrmThis As Form
+Private mbolRegistered As Boolean
+Private mintAccess As Integer
+Private mstrSet As String
+
+Public Sub cmdSetButtons(frm As Form, strSet As String, Optional intAccess As Integer, Optional bolReverse As Boolean)
+
+    Dim ctl As Control
+    Dim qdf As QueryDef
+    Dim rst As DAO.Recordset
+    Dim intPtr As Integer
+    Dim intSort As Integer
+
+    Debug.Print "Button Set " & frm.Name & "/" & strSet
+
+    ' note buttons - ignore with tag "exclude"
+    For Each ctl In frm.Controls
+    
+        If ctl.ControlType = acCommandButton Then
+        
+            ' ignore excluded buttons
+            If LCase(ctl.Tag) <> "exclude" Then
+                If mbolRegistered Then
+                    intPtr = UBound(mcmdButton) + 1
+                    ReDim Preserve mcmdButton(intPtr)
+                    ReDim Preserve mbolInitial(intPtr)
+                Else
+                    mbolRegistered = True
+                    ReDim mcmdButton(0)
+                    ReDim mbolInitial(0)
+                End If
+                Set mcmdButton(intPtr) = ctl
+            End If
+        End If
+    Next
+    
+    ' control direction of buttons
+    If bolReverse Then
+        intSort = -1
+        intPtr = UBound(mcmdButton)
+    Else
+        intSort = 1
+        intPtr = 0
+    End If
+  
+    ' load buttons - from end or beginning
+    If mbolRegistered Then
+        
+        Set qdf = CurrentDb.QueryDefs("qryButtons")
+        qdf.Parameters(0) = intSort
+        qdf.Parameters(1) = strSet
+        qdf.Parameters(2) = intAccess
+        Set rst = qdf.OpenRecordset(dbOpenForwardOnly)
+
+        Do While Not rst.EOF And ((bolReverse And intPtr >= 0) Or (Not bolReverse And intPtr <= UBound(mcmdButton)))
+            If LCase(rst.Fields("CMD_NME")) = "@exclude" Then
+                mcmdButton(intPtr).Visible = False
+            Else
+                mcmdButton(intPtr).Caption = rst.Fields("CMD_NME")
+                mcmdButton(intPtr).Enabled = rst.Fields("Enabled")
+                mcmdButton(intPtr).Visible = True
+                
+                ' save initial state
+                mbolInitial(intPtr) = mcmdButton(intPtr).Enabled
+            End If
+
+            intPtr = intPtr + intSort
+            rst.MoveNext
+        Loop
+        
+        ' clear remainder - access keeps program changes!
+        Do While ((bolReverse And intPtr >= 0) Or (Not bolReverse And intPtr <= UBound(mcmdButton)))
+            mcmdButton(intPtr).Caption = ""
+            mcmdButton(intPtr).Enabled = False
+            mcmdButton(intPtr).Visible = False
+
+            intPtr = intPtr + intSort
+        Loop
+    End If
+    
+    ' save details
+    Set mfrmThis = frm
+    mintAccess = intAccess
+    mstrSet = strSet
+    
+    Set ctl = Nothing
+    qdf.Close
+    Set qdf = Nothing
+    rst.Close
+    Set rst = Nothing
+
+End Sub
+
+Public Sub cmdReset()
+
+    Dim intPtr As Integer
+    
+    For intPtr = 0 To UBound(mbolInitial)
+        mcmdButton(intPtr).Enabled = mbolInitial(intPtr)
+    Next
+
+End Sub
+
+Private Function fFindButton(strCaption As String) As Integer
+
+    Dim intPtr As Integer
+    
+    fFindButton = -1
+
+    If mbolRegistered Then
+        strCaption = LCase(strCaption)
+        For intPtr = 0 To UBound(mcmdButton)
+            If LCase(mcmdButton(intPtr).Caption) = strCaption Then
+                fFindButton = intPtr
+                Exit For
+            End If
+        Next
+    End If
+
+End Function
+
+Public Function cmdSetEnable(strCaption As String, Optional bolEnabled As Boolean = True) As Boolean
+    
+    Dim intPtr As Integer
+
+    intPtr = fFindButton(strCaption)
+    If intPtr >= 0 Then
+        mcmdButton(intPtr).Enabled = bolEnabled
+        cmdSetEnable = True
+    End If
+
+End Function
+
+' intended to pass a column name and enable a button for operations such as "Find"
+Public Function cmdSetTag(strCaption As String, strTag As String) As Boolean
+    
+    Dim intPtr As Integer
+
+    intPtr = fFindButton(strCaption)
+    If intPtr >= 0 Then
+        mcmdButton(intPtr).Tag = strTag
+        mcmdButton(intPtr).Enabled = True
+    End If
+
+End Function
+
+Private Sub Class_Initialize()
+
+    ' place holder
+     
+End Sub
+
+Private Sub Class_Terminate()
+
+    Dim intPtr As Integer
+    
+    If mbolRegistered Then
+        For intPtr = 0 To UBound(mcmdButton)
+            Set mcmdButton(intPtr) = Nothing
+        Next
+    End If
+
+End Sub
